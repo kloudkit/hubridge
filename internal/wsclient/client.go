@@ -5,11 +5,17 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"io/fs"
 	"log/slog"
+	"net"
 	"net/http"
+	"net/url"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/cenkalti/backoff/v5"
@@ -17,6 +23,7 @@ import (
 
 	"github.com/kloudkit/hubridge/internal/home"
 	"github.com/kloudkit/hubridge/internal/protocol"
+	"github.com/kloudkit/hubridge/internal/status"
 )
 
 const (
@@ -31,17 +38,49 @@ var (
 
 type RevokedError struct{ Reason string }
 
-func (e *RevokedError) Error() string {
-	if strings.Contains(e.Reason, "machine") {
-		return "machine removed: rerun the installer"
+func (e *RevokedError) Error() string { return e.Short() + ": rerun the installer" }
+
+func (e *RevokedError) Short() string {
+	switch {
+	case strings.Contains(e.Reason, "machine"):
+		return "machine removed"
+	case e.Reason == "rejected":
+		return "token rejected"
 	}
-	if e.Reason == "rejected" {
-		return "token rejected: rerun the installer"
-	}
-	return "token revoked: rerun the installer"
+	return "token revoked"
 }
 
 func (e *RevokedError) Unwrap() error { return ErrRevoked }
+
+type RefusedError struct {
+	Reason   string
+	Min, Max int
+}
+
+func (e *RefusedError) Error() string { return "hubd " + e.Short() }
+
+func (e *RefusedError) Short() string {
+	switch {
+	case e.Min > protocol.Version:
+		return fmt.Sprintf("refused: protocol %d too old", protocol.Version)
+	case e.Max > 0 && e.Max < protocol.Version:
+		return fmt.Sprintf("refused: protocol %d too new", protocol.Version)
+	case e.Reason != "":
+		return "refused: " + e.Reason
+	}
+	return "refused"
+}
+
+func (e *RefusedError) Unwrap() error { return ErrRefused }
+
+type statusError struct {
+	code int
+	err  error
+}
+
+func (e *statusError) Error() string { return e.err.Error() }
+
+func (e *statusError) Unwrap() error { return e.err }
 
 type Snapshot func() ([]protocol.Summary, protocol.Live)
 
@@ -54,6 +93,7 @@ type Client struct {
 	Queue    *home.Queue
 	Snapshot Snapshot
 	Rules    func(context.Context) error
+	Status   *status.Writer
 	Log      *slog.Logger
 
 	Ping            time.Duration
@@ -114,24 +154,29 @@ func (c *Client) Usage(r protocol.Reading) {
 func (c *Client) Run(ctx context.Context) error {
 	wait := &backoff.ExponentialBackOff{InitialInterval: c.MinBackoff, RandomizationFactor: 0.5, Multiplier: 2, MaxInterval: c.MaxBackoff}
 	wait.Reset()
+	c.Status.Offline("starting")
 	for {
 		welcomed, err := c.connect(ctx)
 		if errors.Is(err, ErrRefused) || errors.Is(err, ErrRevoked) {
+			c.Status.Offline(reason(err))
 			return err
 		}
 		if ctx.Err() != nil {
+			c.Status.Offline("stopped")
 			return nil
 		}
+		c.Status.Offline(reason(err))
 		if welcomed {
 			wait.Reset()
 		}
-		if err == nil {
+		if errors.Is(err, errRotated) {
 			continue
 		}
 		next := wait.NextBackOff()
 		c.Log.Warn("hubd connection", "err", err, "retry", next)
 		select {
 		case <-ctx.Done():
+			c.Status.Offline("stopped")
 			return nil
 		case <-time.After(next):
 		}
@@ -154,6 +199,9 @@ func (c *Client) connect(ctx context.Context) (bool, error) {
 		if resp != nil && resp.StatusCode == http.StatusUnauthorized {
 			return false, &RevokedError{Reason: "rejected"}
 		}
+		if resp != nil && resp.StatusCode != http.StatusSwitchingProtocols {
+			return false, &statusError{code: resp.StatusCode, err: err}
+		}
 		return false, err
 	}
 	conn.SetReadLimit(1 << 20)
@@ -169,12 +217,12 @@ func (c *Client) connect(ctx context.Context) (bool, error) {
 	switch first.Type {
 	case "welcome":
 	case "refused":
-		c.refused(first)
-		return false, ErrRefused
+		return false, c.refused(first)
 	default:
 		return false, fmt.Errorf("expected welcome, got %q", first.Type)
 	}
 	c.Log.Info("connected to hubd", "protocol", first.Protocol)
+	c.Status.Connected()
 
 	sctx, stop := context.WithCancelCause(ctx)
 	defer stop(nil)
@@ -232,7 +280,7 @@ func (c *Client) connect(ctx context.Context) (bool, error) {
 			cause := context.Cause(sctx)
 			if errors.Is(cause, errRotated) {
 				conn.Close(websocket.StatusNormalClosure, "token rotated")
-				return true, nil
+				return true, errRotated
 			}
 			if ctx.Err() != nil {
 				conn.Close(websocket.StatusGoingAway, "daemon stopping")
@@ -264,8 +312,7 @@ func (c *Client) reader(ctx context.Context, stop context.CancelCauseFunc, conn 
 		case "error":
 			c.Log.Error("hubd rejected a message", "error", m.Error)
 		case "refused":
-			c.refused(m)
-			stop(ErrRefused)
+			stop(c.refused(m))
 			return
 		case "command":
 			if c.command(ctx, conn, m, syncs) {
@@ -278,8 +325,9 @@ func (c *Client) reader(ctx context.Context, stop context.CancelCauseFunc, conn 
 	}
 }
 
-func (c *Client) refused(m protocol.Server) {
+func (c *Client) refused(m protocol.Server) error {
 	c.Log.Error("hubd refused this daemon; it waits for an update", "reason", m.Reason, "minProtocol", m.MinProtocol, "maxProtocol", m.MaxProtocol)
+	return &RefusedError{Reason: m.Reason, Min: m.MinProtocol, Max: m.MaxProtocol}
 }
 
 func (c *Client) command(ctx context.Context, conn *websocket.Conn, m protocol.Server, syncs chan<- chan error) bool {
@@ -394,14 +442,49 @@ func (c *Client) read(ctx context.Context, conn *websocket.Conn) (protocol.Serve
 }
 
 func closeErr(err error) error {
-	switch websocket.CloseStatus(err) {
+	ce, _ := errors.AsType[websocket.CloseError](err)
+	switch ce.Code {
 	case CloseRefused:
-		return ErrRefused
+		return &RefusedError{Reason: ce.Reason}
 	case CloseRevoked:
-		ce, _ := errors.AsType[websocket.CloseError](err)
 		return &RevokedError{Reason: ce.Reason}
 	}
 	return err
+}
+
+func reason(err error) string {
+	if e, ok := errors.AsType[*RevokedError](err); ok {
+		return e.Short()
+	}
+	if e, ok := errors.AsType[*RefusedError](err); ok {
+		return e.Short()
+	}
+	if e, ok := errors.AsType[*statusError](err); ok {
+		return fmt.Sprintf("HTTP %d", e.code)
+	}
+	if e, ok := errors.AsType[websocket.CloseError](err); ok {
+		if e.Reason != "" {
+			return "closed by hubd: " + e.Reason
+		}
+		return fmt.Sprintf("closed by hubd with code %d", e.Code)
+	}
+	switch {
+	case errors.Is(err, context.DeadlineExceeded):
+		return "timed out"
+	case errors.Is(err, io.EOF), errors.Is(err, io.ErrUnexpectedEOF), errors.Is(err, net.ErrClosed),
+		errors.Is(err, syscall.ECONNRESET), errors.Is(err, syscall.EPIPE):
+		return "connection lost"
+	}
+	if e, ok := errors.AsType[*fs.PathError](err); ok {
+		return filepath.Base(e.Path) + " file: " + e.Err.Error()
+	}
+	if e, ok := errors.AsType[*url.Error](err); ok {
+		err = e.Err
+		for next := errors.Unwrap(err); next != nil; next = errors.Unwrap(err) {
+			err = next
+		}
+	}
+	return err.Error()
 }
 
 func equalLive(a, b protocol.Live) bool {

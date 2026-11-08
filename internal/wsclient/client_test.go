@@ -14,6 +14,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -22,6 +23,7 @@ import (
 	"github.com/kloudkit/hubridge/internal/home"
 	"github.com/kloudkit/hubridge/internal/protocol"
 	"github.com/kloudkit/hubridge/internal/schematest"
+	"github.com/kloudkit/hubridge/internal/status"
 )
 
 var (
@@ -121,6 +123,41 @@ func summary(id, state string) protocol.Summary {
 	}
 }
 
+func statusFile(t *testing.T, url string) *status.Writer {
+	t.Helper()
+	return status.New(filepath.Join(t.TempDir(), "claude", "hubd", "status.json"), "ws", url, "test", slog.New(slog.NewTextHandler(io.Discard, nil)))
+}
+
+func tokenHome(t *testing.T) *home.Home {
+	t.Helper()
+	h, err := home.Open(filepath.Join(t.TempDir(), "home"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.WriteToken(oldToken); err != nil {
+		t.Fatal(err)
+	}
+	return h
+}
+
+func readStatus(t *testing.T, w *status.Writer) status.Status {
+	t.Helper()
+	s, err := status.Read(w.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
+
+func wantStatus(t *testing.T, w *status.Writer, state, reason string) status.Status {
+	t.Helper()
+	s := readStatus(t, w)
+	if s.State != state || s.Error != reason {
+		t.Fatalf("status %s %q, want %s %q", s.State, s.Error, state, reason)
+	}
+	return s
+}
+
 func TestClientLifecycle(t *testing.T) {
 	schemas := schematest.Load(t)
 	srv := &fakeServer{t: t, schemas: schemas, peers: make(chan *peer, 4)}
@@ -141,6 +178,7 @@ func TestClientLifecycle(t *testing.T) {
 	c.Ping = 50 * time.Millisecond
 	c.MinBackoff = 10 * time.Millisecond
 	c.MaxBackoff = 20 * time.Millisecond
+	c.Status = statusFile(t, ts.URL)
 	c.Session(summary("old-1", "ended"))
 
 	done := make(chan error, 1)
@@ -228,6 +266,7 @@ func TestClientLifecycle(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("daemon kept running after refused")
 	}
+	wantStatus(t, c.Status, status.Offline, "refused: protocol 1 too old")
 	select {
 	case <-srv.peers:
 		t.Fatal("daemon reconnected after refused")
@@ -265,6 +304,7 @@ func TestRevokedStopsReconnecting(t *testing.T) {
 		h.WriteToken(oldToken)
 		c := New(ts.URL, "ws", "test", "bundled", h, func() ([]protocol.Summary, protocol.Live) { return nil, protocol.NewLive(nil, nil) }, slog.New(slog.NewTextHandler(io.Discard, nil)))
 		c.MinBackoff, c.MaxBackoff = time.Millisecond, time.Millisecond
+		c.Status = statusFile(t, ts.URL)
 		done := make(chan error, 1)
 		go func() { done <- c.Run(context.Background()) }()
 		p := srv.accept(t)
@@ -280,6 +320,7 @@ func TestRevokedStopsReconnecting(t *testing.T) {
 		case <-time.After(5 * time.Second):
 			t.Fatalf("%s: daemon kept running", reason)
 		}
+		wantStatus(t, c.Status, status.Offline, reason)
 		select {
 		case <-srv.peers:
 			t.Fatalf("%s: daemon reconnected after 4003", reason)
@@ -290,16 +331,17 @@ func TestRevokedStopsReconnecting(t *testing.T) {
 }
 
 func TestUpgradeStatus(t *testing.T) {
-	for status, revoked := range map[int]bool{http.StatusUnauthorized: true, http.StatusServiceUnavailable: false, http.StatusForbidden: false} {
+	for code, revoked := range map[int]bool{http.StatusUnauthorized: true, http.StatusServiceUnavailable: false, http.StatusForbidden: false} {
 		hits := 0
 		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			hits++
-			w.WriteHeader(status)
+			w.WriteHeader(code)
 		}))
 		h, _ := home.Open(t.TempDir())
 		h.WriteToken(oldToken)
 		c := New(ts.URL, "ws", "test", "bundled", h, func() ([]protocol.Summary, protocol.Live) { return nil, protocol.NewLive(nil, nil) }, slog.New(slog.NewTextHandler(io.Discard, nil)))
 		c.MinBackoff, c.MaxBackoff = time.Millisecond, 2*time.Millisecond
+		c.Status = statusFile(t, ts.URL)
 		ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 		err := c.Run(ctx)
 		cancel()
@@ -308,8 +350,11 @@ func TestUpgradeStatus(t *testing.T) {
 			if !errors.Is(err, ErrRevoked) || err.Error() != "token rejected: rerun the installer" || hits != 1 {
 				t.Fatalf("401: err %v after %d tries", err, hits)
 			}
+			wantStatus(t, c.Status, status.Offline, "token rejected")
 		} else if err != nil || hits < 2 {
-			t.Fatalf("%d: want retries with backoff, got err %v after %d tries", status, err, hits)
+			t.Fatalf("%d: want retries with backoff, got err %v after %d tries", code, err, hits)
+		} else {
+			wantStatus(t, c.Status, status.Offline, "stopped")
 		}
 	}
 }
@@ -545,5 +590,122 @@ func TestTheRulesBackoffStartsAt5sAndCapsAt5m(t *testing.T) {
 	s := time.Second
 	if want := []time.Duration{5 * s, 10 * s, 20 * s, 40 * s, 80 * s, 160 * s, 300 * s, 300 * s, 300 * s}; !slices.Equal(got, want) {
 		t.Fatalf("backoff %v, want %v", got, want)
+	}
+}
+
+func TestTheStatusFileFollowsTheConnection(t *testing.T) {
+	schemas := schematest.Load(t)
+	srv := &fakeServer{t: t, schemas: schemas, peers: make(chan *peer, 4)}
+	ts := httptest.NewServer(srv)
+	defer ts.Close()
+	h := tokenHome(t)
+	c := New(ts.URL, "ws", "test", "bundled", h, func() ([]protocol.Summary, protocol.Live) { return nil, protocol.NewLive(nil, nil) }, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	c.Ping = time.Hour
+	c.MinBackoff, c.MaxBackoff = 10*time.Millisecond, 10*time.Millisecond
+	c.Status = statusFile(t, ts.URL)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- c.Run(ctx) }()
+
+	p := srv.accept(t)
+	p.next(false)
+	start := wantStatus(t, c.Status, status.Offline, "starting")
+	if s := readStatus(t, c.Status); s.Machine != "ws" || s.URL != ts.URL || s.Version != "test" {
+		t.Fatalf("status names %+v", s)
+	}
+
+	p.send(schemas, `{"type":"welcome","protocol":1}`)
+	p.next(true)
+	up := wantStatus(t, c.Status, status.Connected, "")
+	if up.Since.Before(start.Since) {
+		t.Fatalf("connected since %s, before the start at %s", up.Since, start.Since)
+	}
+
+	_ = p.conn.Close(websocket.StatusInternalError, "restart")
+	p = srv.accept(t)
+	wantStatus(t, c.Status, status.Offline, "closed by hubd: restart")
+	p.next(false)
+	p.send(schemas, `{"type":"welcome","protocol":1}`)
+	p.next(true)
+	wantStatus(t, c.Status, status.Connected, "")
+
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("Run returned %v", err)
+	}
+	wantStatus(t, c.Status, status.Offline, "stopped")
+	entries, _ := os.ReadDir(filepath.Dir(c.Status.Path))
+	if len(entries) != 1 || entries[0].Name() != "status.json" {
+		t.Fatalf("left behind next to the status file: %v", entries)
+	}
+}
+
+func TestTheStatusFileIsNotRewrittenWhileTheStateHolds(t *testing.T) {
+	var hits atomic.Int32
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		w.WriteHeader(http.StatusBadGateway)
+	}))
+	defer ts.Close()
+	h := tokenHome(t)
+	c := New(ts.URL, "ws", "test", "bundled", h, func() ([]protocol.Summary, protocol.Live) { return nil, protocol.NewLive(nil, nil) }, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	c.MinBackoff, c.MaxBackoff = time.Millisecond, 2*time.Millisecond
+	c.Status = statusFile(t, ts.URL)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- c.Run(ctx) }()
+	tries := func(n int32) {
+		t.Helper()
+		for deadline := time.Now().Add(5 * time.Second); hits.Load() < n; time.Sleep(time.Millisecond) {
+			if time.Now().After(deadline) {
+				t.Fatalf("%d tries, want %d", hits.Load(), n)
+			}
+		}
+	}
+
+	tries(3)
+	wantStatus(t, c.Status, status.Offline, "HTTP 502")
+	if err := os.WriteFile(c.Status.Path, []byte("sentinel"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tries(8)
+	if b, _ := os.ReadFile(c.Status.Path); string(b) != "sentinel" {
+		t.Fatalf("rewritten while the state held: %s", b)
+	}
+	cancel()
+	<-done
+	wantStatus(t, c.Status, status.Offline, "stopped")
+}
+
+func TestTheReasonIsShortAndCarriesNoURL(t *testing.T) {
+	ts := httptest.NewServer(http.NotFoundHandler())
+	closed := strings.Replace(ts.URL, "http://", "http://op:hunter2@", 1)
+	ts.Close()
+	h := tokenHome(t)
+	c := New(closed, "ws", "test", "bundled", h, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	_, dial := c.connect(context.Background())
+
+	empty, _ := home.Open(t.TempDir())
+	_, token := New(closed, "ws", "test", "bundled", empty, nil, nil).connect(context.Background())
+
+	for err, want := range map[error]string{
+		dial:  "connection refused",
+		token: "token file: no such file or directory",
+		fmt.Errorf("dial: %w", context.DeadlineExceeded):                                    "timed out",
+		fmt.Errorf("failed to get reader: %w", io.EOF):                                      "connection lost",
+		closeErr(websocket.CloseError{Code: websocket.StatusInternalError, Reason: "boom"}): "closed by hubd: boom",
+		closeErr(websocket.CloseError{Code: websocket.StatusGoingAway}):                     "closed by hubd with code 1001",
+		closeErr(websocket.CloseError{Code: CloseRefused, Reason: "retired"}):               "refused: retired",
+		&RefusedError{}: "refused",
+		&RefusedError{Reason: "too old", Min: 2, Max: 2}: "refused: protocol 1 too old",
+		&RevokedError{Reason: "token revoked"}:           "token revoked",
+		errRotated:                                       "token rotated",
+	} {
+		if got := reason(err); got != want {
+			t.Errorf("reason(%v) = %q, want %q", err, got, want)
+		}
+		if strings.Contains(reason(err), "hunter2") || strings.Contains(reason(err), "127.0.0.1") {
+			t.Errorf("reason(%v) carries the URL", err)
+		}
 	}
 }

@@ -21,6 +21,7 @@ import (
 	"github.com/kloudkit/hubridge/internal/protocol"
 	"github.com/kloudkit/hubridge/internal/rules"
 	"github.com/kloudkit/hubridge/internal/sessions"
+	"github.com/kloudkit/hubridge/internal/status"
 	"github.com/kloudkit/hubridge/internal/update"
 	"github.com/kloudkit/hubridge/internal/usage"
 	"github.com/kloudkit/hubridge/internal/wsclient"
@@ -270,6 +271,11 @@ func run(args []string) error {
 		log.Warn("claude not found on PATH: live state comes from the registry files alone, with no waiting reasons or background sessions")
 	}
 	client := wsclient.New(cfg.URL, cfg.Machine, version, cfg.Channel, h, tracker.Snapshot, log)
+	if path, err := status.Path(); err != nil {
+		log.Warn("no Claude config dir, so the status file is not written", "err", err)
+	} else {
+		client.Status = status.New(path, cfg.Machine, cfg.URL, version, log)
+	}
 	if dir, err := rules.Dir(); err != nil {
 		log.Warn("no Claude config dir, so hubd's instructions are not written", "err", err)
 	} else {
@@ -293,6 +299,7 @@ func run(args []string) error {
 		select {
 		case <-ctx.Done():
 			err = nil
+			client.Status.Offline("stopped")
 		case err = <-watchErr:
 			return err
 		}
