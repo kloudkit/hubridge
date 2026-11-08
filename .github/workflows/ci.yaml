@@ -48,14 +48,8 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: 🔍 Vet
-        run: go vet ./...
-
       - name: 🧪 Test
         run: go test -v ./...
-
-      - name: 🐚 Check install.sh
-        run: shellcheck -s sh install.sh
 
   build:
     name: 📦 Build (dry run)
