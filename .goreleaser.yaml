@@ -1,0 +1,42 @@
+---
+version: 2
+
+project_name: hubridge
+
+builds:
+  - env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X main.version={{ .Tag }} -X main.commit={{ .ShortCommit }}
+
+archives:
+  - formats:
+      - binary
+    name_template: "{{ .ProjectName }}-{{ .Os }}-{{ .Arch }}"
+
+checksum:
+  name_template: checksums.txt
+
+release:
+  draft: true
+  extra_files:
+    - glob: ./install.sh
+  footer: |
+    ## Install
+
+    hubridge is installed by the hubd it connects to. Copy the command from hubd's
+    Settings › Access, or add `--version {{ .Tag }}` to take this release from GitHub:
+
+    ```sh
+    curl -fsSL '<hubd>/install?code=<code>' | sh -s -- --version {{ .Tag }}
+    ```
+
+    A machine that already runs hubridge moves to it with `hubridge update --version {{ .Tag }}`.

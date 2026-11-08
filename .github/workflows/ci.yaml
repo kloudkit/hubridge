@@ -1,0 +1,83 @@
+---
+name: 🧪 CI
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/**
+      - .goreleaser.yaml
+      - CHANGELOG.md
+      - go.mod
+      - go.sum
+      - install.sh
+      - internal/**
+      - main.go
+      - protocol/**
+      - tools/**
+  pull_request:
+    paths:
+      - .github/workflows/**
+      - .goreleaser.yaml
+      - CHANGELOG.md
+      - go.mod
+      - go.sum
+      - install.sh
+      - internal/**
+      - main.go
+      - protocol/**
+      - tools/**
+  workflow_call:
+
+permissions:
+  contents: read
+
+# Prefixed, because a called workflow shares its caller's name and the two would wait on each other.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  test:
+    name: 🧪 Test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 📥 Checkout repository
+        uses: actions/checkout@v7
+
+      - name: 🔵 Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: 🔍 Vet
+        run: go vet ./...
+
+      - name: 🧪 Test
+        run: go test -v ./...
+
+      - name: 🐚 Check install.sh
+        run: shellcheck -s sh install.sh
+
+  build:
+    name: 📦 Build (dry run)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 📥 Checkout repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: 🔵 Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: 📦 Build the release artifacts without publishing
+        uses: goreleaser/goreleaser-action@v7
+        with:
+          version: "~> v2"
+          args: release --snapshot --clean
