@@ -25,7 +25,7 @@ import (
 
 const Releases = "https://github.com/kloudkit/hubridge/releases"
 
-var PublicKey = "PUBLIC_KEY_PLACEHOLDER"
+var PublicKey = "4IZvi7v6NM3BdxKMI0n+hA/TTtQasT3rEZc7+y41VZ0="
 
 type Manifest struct {
 	Version  string            `json:"version"`
