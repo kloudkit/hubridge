@@ -31,6 +31,34 @@ recreated container gets its instructions back while hubd is down. A new machine
 its first connect. When hubd stops sending a file, hubridge removes it; it removes only files
 it wrote and leaves anything else in the folder alone.
 
+## Status file
+
+The daemon keeps `~/.claude/hubd/status.json` (under `CLAUDE_CONFIG_DIR` when it is set) saying
+whether it is connected to hubd. The hubd footer mod for Claude Code reads it, to show `hubd`
+while hubridge is connected and `hubd offline` when it is not; with no file, it shows nothing.
+
+```json
+{
+  "state": "offline",
+  "since": "2026-11-08T09:00:00Z",
+  "machine": "ws",
+  "url": "https://hubd.example.com",
+  "version": "v0.4.0",
+  "error": "connection refused"
+}
+```
+
+`state` is `connected` or `offline`, and `since` is when it last changed, in UTC. `url` is the
+hubd it connects to, without credentials. Only `offline` carries `error`, a short reason with
+no URL or token in it: `starting` when the daemon starts, before it connects; `stopped` when it
+shuts down; otherwise why the last connection ended or the last attempt failed, such as
+`connection refused`, `HTTP 502`, `token revoked` or `refused: protocol 1 too old`.
+
+The daemon rewrites the file atomically when it starts, on every `welcome` from hubd, when a
+connection ends or an attempt fails, and when it stops; while the state holds, only a new
+reason rewrites it. A daemon that is killed leaves the file as it was, until it starts again.
+`hubridge doctor` reports the state, its age and the reason.
+
 ## License
 
 Released under the [**MIT License**](https://github.com/kloudkit/hubridge/blob/main/LICENSE),
