@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-08
+
+### Added
+
+- 🚦 Keep `~/.claude/hubd/status.json` saying whether the daemon is connected to hubd, since when and, when it is not, why, for the hubd footer mod to read; it is rewritten atomically when the daemon starts or stops, on every `welcome`, and when a connection ends or an attempt fails
+- 🩺 Report the status file's state, age and reason in `hubridge doctor`
+
 ## [0.3.0] - 2026-11-08
 
 ### Changed
@@ -44,7 +51,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 🔄 Update with `hubridge update`, and in the background on the saved channel
 - 🔏 Check every update against the release's signed manifest and the protocol hubd speaks
 
-[Unreleased]: https://github.com/kloudkit/hubridge/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/kloudkit/hubridge/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/kloudkit/hubridge/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/kloudkit/hubridge/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/kloudkit/hubridge/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/kloudkit/hubridge/releases/tag/v0.1.0
