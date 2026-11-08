@@ -2,11 +2,9 @@ package schematest
 
 import (
 	"bytes"
-	"os"
-	"path/filepath"
-	"runtime"
 	"testing"
 
+	hubd "github.com/kloudkit/hubd/protocol"
 	"github.com/santhosh-tekuri/jsonschema/v6"
 )
 
@@ -16,12 +14,7 @@ type Schemas struct{ Client, Server *jsonschema.Schema }
 
 func Load(t testing.TB) Schemas {
 	t.Helper()
-	_, here, _, _ := runtime.Caller(0)
-	b, err := os.ReadFile(filepath.Join(filepath.Dir(here), "..", "..", "protocol", "client.schema.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	doc, err := jsonschema.UnmarshalJSON(bytes.NewReader(b))
+	doc, err := jsonschema.UnmarshalJSON(bytes.NewReader(hubd.Schema))
 	if err != nil {
 		t.Fatal(err)
 	}

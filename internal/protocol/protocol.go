@@ -3,10 +3,12 @@ package protocol
 import (
 	"encoding/json"
 	"time"
+
+	hubd "github.com/kloudkit/hubd/protocol"
 )
 
 const (
-	Version    = 1
+	Version    = hubd.Version
 	timeFormat = "2006-01-02T15:04:05.000Z"
 )
 

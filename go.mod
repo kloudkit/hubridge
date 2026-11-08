@@ -9,6 +9,8 @@ require (
 	github.com/go-git/go-git/v5 v5.19.3
 	github.com/gofrs/flock v0.13.1
 	github.com/google/renameio/v2 v2.0.2
+	github.com/kloudkit/hubd/protocol v1.0.0
+	github.com/minio/selfupdate v0.6.0
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3
 	github.com/shirou/gopsutil/v4 v4.26.10
 	github.com/tidwall/gjson v1.20.0
@@ -18,6 +20,7 @@ require (
 )
 
 require (
+	aead.dev/minisign v0.2.0 // indirect
 	dario.cat/mergo v1.0.0 // indirect
 	github.com/Microsoft/go-winio v0.6.2 // indirect
 	github.com/ProtonMail/go-crypto v1.1.6 // indirect

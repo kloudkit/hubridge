@@ -14,8 +14,6 @@ on:
       - install.sh
       - internal/**
       - main.go
-      - protocol/**
-      - tools/**
   pull_request:
     paths:
       - .github/workflows/**
@@ -26,8 +24,6 @@ on:
       - install.sh
       - internal/**
       - main.go
-      - protocol/**
-      - tools/**
   workflow_call:
 
 permissions:
