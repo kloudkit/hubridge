@@ -31,14 +31,14 @@ var version, commit = "dev", ""
 const help = `usage: hubridge [command] [flags]
 
 commands:
-  run          watch transcripts and stream them to hubd, and mirror its session rules (default)
+  run          watch transcripts and stream them to hubd, and write the instructions it sends (default)
   enroll       --url <hubd> (--code <code> | --token-file <path>) [--machine <name>]
   setup        add the hubd hooks to Claude Code's settings.json and wrap its status line (--remove undoes both)
   hook         session-start | stop, run by Claude Code
   supervise    restart loop for run (--detach to background it)
   mcp-headers  print the Authorization header for Claude Code's MCP headersHelper
   statusline   run by Claude Code as its status line: keep the usage reading, then run the original
-  doctor       check the Claude Code formats the daemon reads against the pinned ones (--days 7) and list the mirrored rules
+  doctor       check the Claude Code formats the daemon reads against the pinned ones (--days 7) and list the instruction files
   update       install the newest build of the saved channel (--version bundled|latest|<tag> changes the channel)
   version      print the version and the update channel
 
@@ -271,13 +271,9 @@ func run(args []string) error {
 	}
 	client := wsclient.New(cfg.URL, cfg.Machine, version, cfg.Channel, h, tracker.Snapshot, log)
 	if dir, err := rules.Dir(); err != nil {
-		log.Warn("no Claude config dir, so session rules are not mirrored", "err", err)
+		log.Warn("no Claude config dir, so hubd's instructions are not written", "err", err)
 	} else {
-		mirror := rules.New(cfg.URL, cfg.Machine, h, dir, log)
-		if err := mirror.Seed(); err != nil {
-			log.Warn("write the built-in session rules", "err", err)
-		}
-		client.Rules = mirror.Refresh
+		client.Rules = rules.New(cfg.URL, cfg.Machine, h, dir, log).Refresh
 	}
 	watchErr := make(chan error, 1)
 	go func() { watchErr <- tracker.Watch(ctx, client, sessions.DefaultIntervals) }()

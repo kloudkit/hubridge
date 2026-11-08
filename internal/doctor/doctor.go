@@ -279,7 +279,7 @@ func checkStates(r *Report, tr *sessions.Tracker, agents []registry.Agent) {
 func CheckRules(r *Report, homeDir string) {
 	dir, err := rules.Dir()
 	if err != nil || homeDir == "" {
-		r.add(Info, "rules", "no Claude config dir or client home, so the session rules were not checked")
+		r.add(Info, "rules", "no Claude config dir or client home, so the instructions were not checked")
 		return
 	}
 	m, found, err := rules.ReadManifest(filepath.Join(homeDir, rules.ManifestFile))
@@ -288,7 +288,7 @@ func CheckRules(r *Report, homeDir string) {
 		r.add(Info, "rules", "%v", err)
 		return
 	case !found:
-		r.add(Info, "rules", "%s: nothing written yet; the daemon writes the built-ins when it starts", dir)
+		r.add(Info, "rules", "%s: nothing written yet; the daemon writes hubd's instructions when it connects", dir)
 		return
 	}
 	names := slices.Sorted(maps.Keys(m.Files))

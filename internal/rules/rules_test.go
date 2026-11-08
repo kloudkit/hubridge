@@ -2,6 +2,7 @@ package rules
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -128,52 +129,65 @@ func want(t *testing.T, got []string, names ...string) {
 	}
 }
 
-func TestBuiltinsAreEmbedded(t *testing.T) {
-	for name, title := range map[string]string{"estate": "# Estate\n", "secrets": "# Never print a secret value\n", "git": "# Other sessions share the checkouts"} {
-		b := string(builtin(name))
-		if !strings.HasPrefix(b, title) || !strings.HasSuffix(b, ".\n") || strings.HasSuffix(b, "\n\n") {
-			t.Fatalf("%s.md: %q", name, b)
-		}
-	}
-}
-
 func TestOKWritesThenRemovesOnlyWhatWasDropped(t *testing.T) {
 	f := setup(t)
-	f.srv.answer(http.StatusOK, `"v1"`, `{"builtins":{"estate":true,"secrets":true,"git":false,"future":"x"},"files":[{"name":"pinned.md","body":"# Pinned\n"},{"name":"extra.md","body":"# Extra\n"}]}`)
+	f.srv.answer(http.StatusOK, `"v1"`, `{"files":[{"name":"pinned.md","body":"# Pinned\n"},{"name":"extra.md","body":"# Extra\n"}]}`)
 	f.refresh(t)
 	r := f.srv.last()
 	if r.Header.Get("Authorization") != "Bearer "+token || r.URL.Query().Get("machine") != "ws one" || r.Header.Get("If-None-Match") != "" {
 		t.Fatalf("first request: auth set %v, machine %q, If-None-Match %q", r.Header.Get("Authorization") != "", r.URL.Query().Get("machine"), r.Header.Get("If-None-Match"))
 	}
-	want(t, f.files(t), "estate.md", "extra.md", "pinned.md", "secrets.md")
-	if f.read(t, "pinned.md") != "# Pinned\n" || f.read(t, "estate.md") != string(builtin("estate")) {
+	want(t, f.files(t), "extra.md", "pinned.md")
+	if f.read(t, "pinned.md") != "# Pinned\n" || f.read(t, "extra.md") != "# Extra\n" {
 		t.Fatal("contents differ from the answer")
 	}
 	if st, _ := os.Stat(filepath.Join(f.dir, "pinned.md")); st.Mode().Perm() != 0o644 {
 		t.Fatalf("file mode %o", st.Mode().Perm())
 	}
 	m := f.manifest(t)
-	if m.ETag != `"v1"` || len(m.Files) != 4 || m.Files["pinned.md"] != digest([]byte("# Pinned\n")) {
+	if m.ETag != `"v1"` || len(m.Files) != 2 || m.Files["pinned.md"] != digest([]byte("# Pinned\n")) {
 		t.Fatalf("manifest %+v", m)
 	}
-	estate, _ := os.Stat(filepath.Join(f.dir, "estate.md"))
+	pinned, _ := os.Stat(filepath.Join(f.dir, "pinned.md"))
 
-	f.srv.answer(http.StatusOK, `"v2"`, `{"builtins":{"git":false},"files":[{"name":"pinned.md","body":"# Pinned\n"}]}`)
+	f.srv.answer(http.StatusOK, `"v2"`, `{"files":[{"name":"pinned.md","body":"# Pinned\n"}]}`)
 	f.refresh(t)
 	if f.srv.last().Header.Get("If-None-Match") != `"v1"` {
 		t.Fatal("the stored ETag was not sent")
 	}
-	want(t, f.files(t), "estate.md", "pinned.md", "secrets.md")
-	if again, _ := os.Stat(filepath.Join(f.dir, "estate.md")); !os.SameFile(estate, again) {
+	want(t, f.files(t), "pinned.md")
+	if again, _ := os.Stat(filepath.Join(f.dir, "pinned.md")); !os.SameFile(pinned, again) {
 		t.Fatal("an unchanged file was rewritten")
 	}
-	if m := f.manifest(t); m.ETag != `"v2"` || len(m.Files) != 3 {
+	if m := f.manifest(t); m.ETag != `"v2"` || len(m.Files) != 1 {
 		t.Fatalf("manifest %+v", m)
 	}
 
-	f.srv.answer(http.StatusOK, `"v3"`, `{"builtins":{},"files":[]}`)
+	for i, body := range []string{`{"files":[{"name":"pinned.md","body":"x"}]}`, `{"files":[]}`, `{"files":[{"name":"pinned.md","body":"x"}]}`, `{"files":null}`, `{"files":[{"name":"pinned.md","body":"x"}]}`, `{}`} {
+		f.srv.answer(http.StatusOK, fmt.Sprintf(`"v%d"`, i+3), body)
+		f.refresh(t)
+		if i%2 == 0 {
+			want(t, f.files(t), "pinned.md")
+			continue
+		}
+		want(t, f.files(t))
+		if m := f.manifest(t); len(m.Files) != 0 {
+			t.Fatalf("%s: manifest %+v", body, m)
+		}
+	}
+}
+
+func TestTheBuiltinsKeyIsIgnored(t *testing.T) {
+	f := setup(t)
+	f.srv.answer(http.StatusOK, `"v1"`, `{"builtins":{"estate":true,"secrets":false,"git":"no","future":{}},"files":[{"name":"estate.md","body":"mine"}]}`)
 	f.refresh(t)
-	want(t, f.files(t), "estate.md", "git.md", "secrets.md")
+	want(t, f.files(t), "estate.md")
+	if f.read(t, "estate.md") != "mine" {
+		t.Fatal("estate.md is not the body hubd sent")
+	}
+	f.srv.answer(http.StatusOK, `"v2"`, `{"builtins":"anything"}`)
+	f.refresh(t)
+	want(t, f.files(t))
 }
 
 func TestNotModifiedWritesNothing(t *testing.T) {
@@ -192,7 +206,7 @@ func TestNotModifiedWritesNothing(t *testing.T) {
 	if m, _ := os.Stat(f.mirror.Home.Path(ManifestFile)); !os.SameFile(before, after) || !os.SameFile(manifest, m) {
 		t.Fatal("a 304 rewrote a file")
 	}
-	want(t, f.files(t), "estate.md", "git.md", "pinned.md", "secrets.md")
+	want(t, f.files(t), "pinned.md")
 }
 
 func TestAMissingFileDropsTheETag(t *testing.T) {
@@ -213,21 +227,20 @@ func TestAMissingFileDropsTheETag(t *testing.T) {
 
 func TestNotFoundKeepsTheFiles(t *testing.T) {
 	f := setup(t)
-	f.srv.answer(http.StatusOK, `"v1"`, `{"builtins":{"estate":false},"files":[{"name":"pinned.md","body":"x"}]}`)
+	f.srv.answer(http.StatusOK, `"v1"`, `{"files":[{"name":"pinned.md","body":"x"},{"name":"extra.md","body":"y"}]}`)
 	f.refresh(t)
-	want(t, f.files(t), "git.md", "pinned.md", "secrets.md")
 	pinned, _ := os.Stat(filepath.Join(f.dir, "pinned.md"))
 	manifest, _ := os.Stat(f.mirror.Home.Path(ManifestFile))
-	f.srv.answer(http.StatusNotFound, "", "")
+	f.srv.answer(http.StatusNotFound, "", "404 page not found")
 	if err := f.mirror.Refresh(context.Background()); err == nil || !strings.Contains(err.Error(), "HTTP 404") {
 		t.Fatalf("a 404 returned %v", err)
 	}
-	want(t, f.files(t), "git.md", "pinned.md", "secrets.md")
+	want(t, f.files(t), "extra.md", "pinned.md")
 	after, _ := os.Stat(filepath.Join(f.dir, "pinned.md"))
 	if m, _ := os.Stat(f.mirror.Home.Path(ManifestFile)); !os.SameFile(pinned, after) || !os.SameFile(manifest, m) {
 		t.Fatal("a 404 rewrote a file")
 	}
-	if m := f.manifest(t); m.ETag != `"v1"` || len(m.Files) != 3 {
+	if m := f.manifest(t); m.ETag != `"v1"` || len(m.Files) != 2 {
 		t.Fatalf("manifest %+v", m)
 	}
 }
@@ -236,13 +249,17 @@ func TestOtherAnswersKeepWhatIsOnDisk(t *testing.T) {
 	f := setup(t)
 	f.srv.answer(http.StatusOK, `"v1"`, `{"files":[{"name":"pinned.md","body":"x"}]}`)
 	f.refresh(t)
-	for _, a := range []answer{{http.StatusInternalServerError, "", ""}, {http.StatusUnauthorized, "", ""}, {http.StatusOK, `"v2"`, `{"files":`}, {http.StatusOK, `"v2"`, `{"builtins":{"git":"no"}}`}} {
+	for _, a := range []answer{
+		{http.StatusInternalServerError, "", ""}, {http.StatusBadGateway, "", "<html>bad gateway</html>"}, {http.StatusUnauthorized, "", ""},
+		{http.StatusOK, `"v2"`, `{"files":`}, {http.StatusOK, `"v2"`, ``}, {http.StatusOK, `"v2"`, `null`}, {http.StatusOK, `"v2"`, `[]`},
+		{http.StatusOK, `"v2"`, `<html>maintenance</html>`}, {http.StatusOK, `"v2"`, `{"files":{"pinned.md":"x"}}`},
+	} {
 		f.srv.answer(a.status, a.etag, a.body)
 		if err := f.mirror.Refresh(context.Background()); err == nil || strings.Contains(err.Error(), token) {
 			t.Fatalf("%d %s: err %v", a.status, a.body, err)
 		}
-		want(t, f.files(t), "estate.md", "git.md", "pinned.md", "secrets.md")
-		if m := f.manifest(t); m.ETag != `"v1"` {
+		want(t, f.files(t), "pinned.md")
+		if m := f.manifest(t); m.ETag != `"v1"` || len(m.Files) != 1 {
 			t.Fatalf("manifest %+v", m)
 		}
 	}
@@ -269,7 +286,7 @@ func TestForeignFilesSurvive(t *testing.T) {
 	if !strings.Contains(f.logs.String(), "taken.md") {
 		t.Fatal("the skipped file was not logged")
 	}
-	f.srv.answer(http.StatusOK, `"v2"`, `{"builtins":{"estate":false,"secrets":false,"git":false},"files":[]}`)
+	f.srv.answer(http.StatusOK, `"v2"`, `{"files":[]}`)
 	f.refresh(t)
 	want(t, f.files(t), "mine.md", "taken.md")
 }
@@ -278,18 +295,18 @@ func TestInvalidNamesAreSkipped(t *testing.T) {
 	f := setup(t)
 	f.srv.answer(http.StatusOK, `"v1"`, `{"files":[
 		{"name":"../escape.md","body":"x"},{"name":"Upper.md","body":"x"},{"name":"-dash.md","body":"x"},
-		{"name":"notes.txt","body":"x"},{"name":"a/b.md","body":"x"},{"name":"estate.md","body":"spoof"},
-		{"name":"git.md","body":"spoof"},{"name":"ok-1.md","body":"first"},{"name":"ok-1.md","body":"second"}
+		{"name":"notes.txt","body":"x"},{"name":"a/b.md","body":"x"},{"name":"","body":"x"},{"name":".md","body":"x"},
+		{"name":"estate.md","body":"named like an old built-in"},{"name":"ok-1.md","body":"first"},{"name":"ok-1.md","body":"second"}
 	]}`)
 	f.refresh(t)
-	want(t, f.files(t), "estate.md", "git.md", "ok-1.md", "secrets.md")
-	if f.read(t, "estate.md") != string(builtin("estate")) || f.read(t, "ok-1.md") != "first" {
+	want(t, f.files(t), "estate.md", "ok-1.md")
+	if f.read(t, "estate.md") != "named like an old built-in" || f.read(t, "ok-1.md") != "first" {
 		t.Fatal("an invalid entry was written")
 	}
 	if _, err := os.Stat(filepath.Join(filepath.Dir(f.dir), "escape.md")); err == nil {
 		t.Fatal("a name escaped the rules dir")
 	}
-	for _, name := range []string{"../escape.md", "Upper.md", "-dash.md", "notes.txt", "a/b.md", "estate.md", "git.md", "ok-1.md"} {
+	for _, name := range []string{"../escape.md", "Upper.md", "-dash.md", "notes.txt", "a/b.md", ".md", "ok-1.md"} {
 		if !strings.Contains(f.logs.String(), name) {
 			t.Fatalf("no warning for %s", name)
 		}
@@ -326,28 +343,5 @@ func TestRefreshesNeverOverlap(t *testing.T) {
 	wg.Wait()
 	if most != 1 {
 		t.Fatalf("%d refreshes ran at once", most)
-	}
-}
-
-func TestSeedWritesTheDefaultsOnce(t *testing.T) {
-	f := setup(t)
-	if err := f.mirror.Seed(); err != nil {
-		t.Fatal(err)
-	}
-	want(t, f.files(t), "estate.md", "git.md", "secrets.md")
-	if st, _ := os.Stat(f.dir); !st.IsDir() {
-		t.Fatal("no rules dir")
-	}
-	if m := f.manifest(t); m.ETag != "" || len(m.Files) != 3 {
-		t.Fatalf("manifest %+v", m)
-	}
-	f.srv.answer(http.StatusOK, `"v1"`, `{"builtins":{"git":false}}`)
-	f.refresh(t)
-	if err := f.mirror.Seed(); err != nil {
-		t.Fatal(err)
-	}
-	want(t, f.files(t), "estate.md", "secrets.md")
-	if len(f.srv.seen) != 1 {
-		t.Fatalf("seed called hubd: %d requests", len(f.srv.seen))
 	}
 }
