@@ -21,6 +21,7 @@ import (
 	"github.com/kloudkit/hubridge/internal/protocol"
 	"github.com/kloudkit/hubridge/internal/registry"
 	"github.com/kloudkit/hubridge/internal/sessions"
+	"github.com/kloudkit/hubridge/internal/update"
 	"github.com/kloudkit/hubridge/internal/usage"
 	"github.com/kloudkit/hubridge/internal/wsclient"
 )
@@ -38,7 +39,8 @@ commands:
   mcp-headers  print the Authorization header for Claude Code's MCP headersHelper
   statusline   run by Claude Code as its status line: keep the usage reading, then run the original
   doctor       check the Claude Code formats the daemon reads against the pinned ones (--days 7)
-  version      print the version
+  update       install the newest build of the saved channel (--version bundled|latest|<tag> changes the channel)
+  version      print the version and the update channel
 
 every command takes --home <dir> (default $HUBD_HOME, else ~/.config/hubd)
 `
@@ -68,8 +70,10 @@ func main() {
 		os.Exit(statusLine(args))
 	case "doctor":
 		os.Exit(doctorCmd(args))
+	case "update":
+		err = updateCmd(args)
 	case "version":
-		fmt.Println(strings.TrimSpace(version + " " + commit))
+		printVersion(args)
 	case "help":
 		fmt.Print(help)
 	default:
@@ -285,8 +289,10 @@ func run(args []string) error {
 	go func() { watchErr <- tracker.Watch(ctx, client, sessions.DefaultIntervals) }()
 	go usage.Watch(ctx, h, client.Usage, tracker.AnyLive, probe(h.Dir), log, usage.DefaultIntervals, time.Now)
 	go rewrap(ctx, h, log)
+	kick := make(chan struct{}, 1)
+	go autoUpdate(ctx, h, cfg.Channel, kick, log)
 
-	log.Info("hubridge started", "version", version, "home", h.Dir, "projects", *projects, "machine", cfg.Machine)
+	log.Info("hubridge started", "version", version, "channel", cfg.Channel, "home", h.Dir, "projects", *projects, "machine", cfg.Machine)
 	err = client.Run(ctx)
 	if errors.Is(err, wsclient.ErrRevoked) {
 		log.Error(err.Error())
@@ -296,6 +302,7 @@ func run(args []string) error {
 	}
 	if errors.Is(err, wsclient.ErrRefused) {
 		log.Error("not reconnecting until the daemon is updated")
+		kick <- struct{}{}
 		select {
 		case <-ctx.Done():
 		case err = <-watchErr:
@@ -308,6 +315,75 @@ func run(args []string) error {
 		return werr
 	}
 	return err
+}
+
+func autoUpdate(ctx context.Context, h *home.Home, channel string, kick <-chan struct{}, log *slog.Logger) {
+	if version == "dev" || os.Getenv("HUBRIDGE_NO_AUTOUPDATE") == "1" {
+		return
+	}
+	u, err := update.New(h, version)
+	if err != nil {
+		log.Warn("auto-update is off", "err", err)
+		return
+	}
+	u.Watch(ctx, channel, 6*time.Hour, kick, log)
+}
+
+func updateCmd(args []string) error {
+	fs, homeFlag := flags("update")
+	to := fs.String("version", "", "bundled, latest or a release tag, saved as the channel")
+	fs.Parse(args)
+	h, err := openHome(*homeFlag)
+	if err != nil {
+		return err
+	}
+	cfg, err := h.Config()
+	if err != nil {
+		return err
+	}
+	channel := cfg.Channel
+	if *to != "" {
+		channel = *to
+	}
+	u, err := update.New(h, version)
+	if err != nil {
+		return err
+	}
+	res, err := u.Run(context.Background(), channel, true)
+	if err != nil {
+		return err
+	}
+	if channel != cfg.Channel {
+		cfg.Channel = channel
+		if err := h.WriteConfig(cfg); err != nil {
+			return err
+		}
+	}
+	switch {
+	case !res.Changed:
+		fmt.Printf("hubridge is up to date (%s, %s)\n", res.From, channel)
+		return nil
+	case res.Downgrade:
+		fmt.Printf("downgraded %s → %s (%s)\n", res.From, res.To, channel)
+	default:
+		fmt.Printf("updated %s → %s (%s)\n", res.From, res.To, channel)
+	}
+	if h.Held("supervisor.lock") {
+		fmt.Println("the daemon restarts on it within 15 seconds")
+	}
+	return nil
+}
+
+func printVersion(args []string) {
+	fs, homeFlag := flags("version")
+	fs.Parse(args)
+	out := strings.TrimSpace(version + " " + commit)
+	if dir, err := home.Resolve(*homeFlag); err == nil {
+		if cfg, err := (&home.Home{Dir: dir}).Config(); err == nil {
+			out += " (" + cfg.Channel + ")"
+		}
+	}
+	fmt.Println(out)
 }
 
 func probe(dir string) usage.Prober {
