@@ -110,8 +110,6 @@ func Fetch(ctx context.Context, c *http.Client, base, machine, token, etag strin
 	switch resp.StatusCode {
 	case http.StatusNotModified:
 		return Answer{}, nil
-	case http.StatusNotFound:
-		return Answer{Changed: true, Rules: Defaults()}, nil
 	case http.StatusOK:
 	default:
 		return Answer{}, fmt.Errorf("%s: HTTP %d", u, resp.StatusCode)

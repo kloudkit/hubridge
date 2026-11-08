@@ -211,15 +211,23 @@ func TestAMissingFileDropsTheETag(t *testing.T) {
 	}
 }
 
-func TestNotFoundUsesTheDefaults(t *testing.T) {
+func TestNotFoundKeepsTheFiles(t *testing.T) {
 	f := setup(t)
 	f.srv.answer(http.StatusOK, `"v1"`, `{"builtins":{"estate":false},"files":[{"name":"pinned.md","body":"x"}]}`)
 	f.refresh(t)
 	want(t, f.files(t), "git.md", "pinned.md", "secrets.md")
+	pinned, _ := os.Stat(filepath.Join(f.dir, "pinned.md"))
+	manifest, _ := os.Stat(f.mirror.Home.Path(ManifestFile))
 	f.srv.answer(http.StatusNotFound, "", "")
-	f.refresh(t)
-	want(t, f.files(t), "estate.md", "git.md", "secrets.md")
-	if m := f.manifest(t); m.ETag != "" || len(m.Files) != 3 {
+	if err := f.mirror.Refresh(context.Background()); err == nil || !strings.Contains(err.Error(), "HTTP 404") {
+		t.Fatalf("a 404 returned %v", err)
+	}
+	want(t, f.files(t), "git.md", "pinned.md", "secrets.md")
+	after, _ := os.Stat(filepath.Join(f.dir, "pinned.md"))
+	if m, _ := os.Stat(f.mirror.Home.Path(ManifestFile)); !os.SameFile(pinned, after) || !os.SameFile(manifest, m) {
+		t.Fatal("a 404 rewrote a file")
+	}
+	if m := f.manifest(t); m.ETag != `"v1"` || len(m.Files) != 3 {
 		t.Fatalf("manifest %+v", m)
 	}
 }
