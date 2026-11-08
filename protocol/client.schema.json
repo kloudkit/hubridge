@@ -1,0 +1,942 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hubd/protocol/client.schema.json",
+  "title": "hubd client socket messages, protocol 1",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/clientMessage"
+    },
+    {
+      "$ref": "#/$defs/serverMessage"
+    }
+  ],
+  "$defs": {
+    "clientMessage": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/hello"
+        },
+        {
+          "$ref": "#/$defs/ping"
+        },
+        {
+          "$ref": "#/$defs/session"
+        },
+        {
+          "$ref": "#/$defs/live"
+        },
+        {
+          "$ref": "#/$defs/usage"
+        },
+        {
+          "$ref": "#/$defs/result"
+        }
+      ]
+    },
+    "serverMessage": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/welcome"
+        },
+        {
+          "$ref": "#/$defs/refused"
+        },
+        {
+          "$ref": "#/$defs/ack"
+        },
+        {
+          "$ref": "#/$defs/command"
+        },
+        {
+          "$ref": "#/$defs/error"
+        }
+      ]
+    },
+    "messageId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "iso": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "hello": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "hello"
+        },
+        "machine": {
+          "type": "string",
+          "minLength": 1
+        },
+        "protocol": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "channel": {
+          "type": "string",
+          "pattern": "^(bundled|latest|v[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.-]+)?)$"
+        }
+      },
+      "required": [
+        "type",
+        "machine",
+        "protocol",
+        "version",
+        "channel"
+      ],
+      "additionalProperties": false
+    },
+    "ping": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "ping"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "additionalProperties": false
+    },
+    "session": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "session"
+        },
+        "id": {
+          "$ref": "#/$defs/messageId"
+        },
+        "session": {
+          "$ref": "#/$defs/summary"
+        }
+      },
+      "required": [
+        "type",
+        "id",
+        "session"
+      ],
+      "additionalProperties": false
+    },
+    "summary": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "folder": {
+          "type": "string"
+        },
+        "root": {
+          "type": "string",
+          "description": "The git root the session edited most, else the one it read or ran commands in most, else the start folder; an absolute path on the machine."
+        },
+        "remote": {
+          "description": "That root's origin URL, when it has one.",
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "repo": {
+          "type": "string",
+          "description": "Deprecated name of root, still read as root for daemons from before the change."
+        },
+        "title": {
+          "type": "string"
+        },
+        "excerpt": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "state": {
+          "enum": [
+            "working",
+            "waiting",
+            "ended"
+          ]
+        },
+        "startedAt": {
+          "$ref": "#/$defs/iso"
+        },
+        "lastEventAt": {
+          "$ref": "#/$defs/iso"
+        },
+        "endedAt": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/iso"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "tokens": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/dayTokens"
+          }
+        },
+        "hours": {
+          "description": "Per-UTC-hour totals for the last 48 hours, non-zero hours only.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/hourTokens"
+          }
+        },
+        "todoWrites": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true
+        },
+        "status": {
+          "enum": [
+            "busy",
+            "waiting",
+            "idle"
+          ],
+          "description": "Claude Code's own status for the session, from ~/.claude/sessions and claude agents --json; absent when it has ended or the machine has no registry."
+        },
+        "waitingFor": {
+          "type": "string",
+          "description": "Why it waits, from claude agents --json: permission prompt, input needed, sandbox request, worker request, dialog open."
+        },
+        "name": {
+          "type": "string"
+        },
+        "customTitle": {
+          "type": "string",
+          "description": "A title set with /rename, which the session shows over its ai-title."
+        },
+        "kind": {
+          "enum": [
+            "interactive",
+            "background"
+          ]
+        },
+        "job": {
+          "$ref": "#/$defs/job",
+          "description": "A background session's short id and its state: working, blocked, done, failed or stopped."
+        },
+        "version": {
+          "type": "string",
+          "description": "The Claude Code version running it."
+        },
+        "branch": {
+          "type": "string"
+        },
+        "topics": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9.-]{0,39}$"
+          },
+          "description": "The topics of the estate claims the session read or edited, those of the most claims first."
+        },
+        "continuedIn": {
+          "type": "string",
+          "description": "The session this one moved into, with --bg or /branch."
+        },
+        "models": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/modelTokens"
+          },
+          "description": "Per UTC day, model and speed; each reply counted once on the machine, in the session that wrote it first."
+        },
+        "ledger": {
+          "$ref": "#/$defs/ledger"
+        },
+        "context": {
+          "$ref": "#/$defs/context"
+        },
+        "compactions": {
+          "type": "array",
+          "maxItems": 20,
+          "items": {
+            "$ref": "#/$defs/compaction"
+          }
+        },
+        "limitHits": {
+          "type": "array",
+          "maxItems": 20,
+          "items": {
+            "$ref": "#/$defs/limitHit"
+          }
+        },
+        "prs": {
+          "type": "array",
+          "maxItems": 20,
+          "items": {
+            "$ref": "#/$defs/pr"
+          }
+        },
+        "background": {
+          "$ref": "#/$defs/background"
+        }
+      },
+      "required": [
+        "id",
+        "folder",
+        "title",
+        "excerpt",
+        "state",
+        "startedAt",
+        "lastEventAt",
+        "endedAt",
+        "tokens",
+        "todoWrites"
+      ],
+      "additionalProperties": false,
+      "anyOf": [
+        {
+          "required": [
+            "root"
+          ]
+        },
+        {
+          "required": [
+            "repo"
+          ]
+        }
+      ]
+    },
+    "dayTokens": {
+      "type": "object",
+      "properties": {
+        "day": {
+          "type": "string",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+        },
+        "input": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "output": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "cacheRead": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "cacheWrite": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "day",
+        "input",
+        "output",
+        "cacheRead",
+        "cacheWrite"
+      ],
+      "additionalProperties": false
+    },
+    "hourTokens": {
+      "type": "object",
+      "properties": {
+        "hour": {
+          "type": "string",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:00:00Z$"
+        },
+        "input": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "output": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "cacheRead": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "cacheWrite": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "hour",
+        "input",
+        "output",
+        "cacheRead",
+        "cacheWrite"
+      ],
+      "additionalProperties": false
+    },
+    "live": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "live"
+        },
+        "live": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true
+        },
+        "present": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "type",
+        "live",
+        "present"
+      ],
+      "additionalProperties": false
+    },
+    "result": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "result"
+        },
+        "of": {
+          "$ref": "#/$defs/messageId"
+        },
+        "ok": {
+          "type": "boolean"
+        },
+        "error": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "of",
+        "ok"
+      ],
+      "if": {
+        "properties": {
+          "ok": {
+            "const": false
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "error"
+        ]
+      },
+      "else": {
+        "not": {
+          "required": [
+            "error"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "welcome": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "welcome"
+        },
+        "protocol": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "required": [
+        "type",
+        "protocol"
+      ],
+      "additionalProperties": false
+    },
+    "refused": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "refused"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "minProtocol": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "maxProtocol": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "required": [
+        "type",
+        "reason",
+        "minProtocol",
+        "maxProtocol"
+      ],
+      "additionalProperties": false
+    },
+    "ack": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "ack"
+        },
+        "of": {
+          "$ref": "#/$defs/messageId"
+        }
+      },
+      "required": [
+        "type",
+        "of"
+      ],
+      "additionalProperties": false
+    },
+    "error": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "error"
+        },
+        "error": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "error"
+      ],
+      "additionalProperties": false
+    },
+    "command": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "command"
+        },
+        "id": {
+          "$ref": "#/$defs/messageId"
+        },
+        "command": {
+          "enum": [
+            "rotate",
+            "restore",
+            "sync"
+          ]
+        },
+        "args": {
+          "type": "object"
+        }
+      },
+      "required": [
+        "type",
+        "id",
+        "command",
+        "args"
+      ],
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "command": {
+                "const": "rotate"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "args": {
+                "type": "object",
+                "properties": {
+                  "token": {
+                    "type": "string",
+                    "pattern": "^hubd_[A-Za-z0-9_-]{43}$"
+                  }
+                },
+                "required": [
+                  "token"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "command": {
+                "const": "restore"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "args": {
+                "type": "object",
+                "properties": {
+                  "sessionId": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": [
+                  "sessionId"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        }
+      ],
+      "additionalProperties": false
+    },
+    "usageWindow": {
+      "type": "object",
+      "properties": {
+        "utilization": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 2
+        },
+        "resetsAt": {
+          "$ref": "#/$defs/iso"
+        }
+      },
+      "required": [
+        "utilization",
+        "resetsAt"
+      ],
+      "additionalProperties": false
+    },
+    "usage": {
+      "type": "object",
+      "description": "The account's latest Claude usage reading; no id, the latest wins.",
+      "properties": {
+        "type": {
+          "const": "usage"
+        },
+        "usage": {
+          "type": "object",
+          "properties": {
+            "fiveHour": {
+              "$ref": "#/$defs/usageWindow"
+            },
+            "sevenDay": {
+              "$ref": "#/$defs/usageWindow"
+            },
+            "source": {
+              "enum": [
+                "statusline",
+                "probe"
+              ]
+            },
+            "at": {
+              "$ref": "#/$defs/iso"
+            }
+          },
+          "required": [
+            "source",
+            "at"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "type",
+        "usage"
+      ],
+      "additionalProperties": false
+    },
+    "modelTokens": {
+      "type": "object",
+      "properties": {
+        "day": {
+          "type": "string",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+        },
+        "model": {
+          "type": "string"
+        },
+        "speed": {
+          "type": "string",
+          "description": "The reply's usage.speed, such as standard or fast."
+        },
+        "input": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "output": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "cacheRead": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "cacheWrite5m": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "cacheWrite1h": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "webSearch": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "webFetch": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "day",
+        "model",
+        "input",
+        "output",
+        "cacheRead",
+        "cacheWrite5m",
+        "cacheWrite1h"
+      ],
+      "additionalProperties": false
+    },
+    "ledgerModel": {
+      "type": "object",
+      "properties": {
+        "model": {
+          "type": "string"
+        },
+        "input": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "output": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "cacheRead": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "cacheWrite5m": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "cacheWrite1h": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "webSearch": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "costUSD": {
+          "type": "number",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "model",
+        "input",
+        "output",
+        "cacheRead",
+        "cacheWrite5m",
+        "cacheWrite1h",
+        "costUSD"
+      ],
+      "additionalProperties": false
+    },
+    "ledger": {
+      "type": "object",
+      "properties": {
+        "at": {
+          "$ref": "#/$defs/iso"
+        },
+        "costUSD": {
+          "type": "number",
+          "minimum": 0
+        },
+        "linesAdded": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "linesRemoved": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "apiMs": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "toolMs": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "models": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ledgerModel"
+          }
+        }
+      },
+      "required": [
+        "costUSD",
+        "linesAdded",
+        "linesRemoved",
+        "apiMs",
+        "toolMs",
+        "models"
+      ],
+      "additionalProperties": false,
+      "description": "The last cost-state line of the main transcript: Claude Code's own cost ledger, written when a run ends."
+    },
+    "context": {
+      "type": "object",
+      "properties": {
+        "at": {
+          "$ref": "#/$defs/iso"
+        },
+        "tokens": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "model": {
+          "type": "string"
+        },
+        "requestedModel": {
+          "type": "string",
+          "description": "As asked for, with a [1m] suffix for a 1M window."
+        }
+      },
+      "required": [
+        "at",
+        "tokens"
+      ],
+      "additionalProperties": false,
+      "description": "Input, cache-write and cache-read tokens of the last main-chain reply, or the post-compaction size after a compaction."
+    },
+    "compaction": {
+      "type": "object",
+      "properties": {
+        "at": {
+          "$ref": "#/$defs/iso"
+        },
+        "trigger": {
+          "type": "string"
+        },
+        "preTokens": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "postTokens": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "at",
+        "preTokens",
+        "postTokens"
+      ],
+      "additionalProperties": false
+    },
+    "limitHit": {
+      "type": "object",
+      "properties": {
+        "at": {
+          "$ref": "#/$defs/iso"
+        },
+        "type": {
+          "type": "string"
+        },
+        "resetsAt": {
+          "$ref": "#/$defs/iso"
+        },
+        "status": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "at"
+      ],
+      "additionalProperties": false
+    },
+    "pr": {
+      "type": "object",
+      "properties": {
+        "number": {
+          "type": "integer"
+        },
+        "url": {
+          "type": "string"
+        },
+        "repo": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "number",
+        "url"
+      ],
+      "additionalProperties": false
+    },
+    "job": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "state": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "additionalProperties": false
+    },
+    "background": {
+      "type": "object",
+      "description": "From the Stop hook's background_tasks and session_crons when the last turn ended: in-flight tasks by type (shell, subagent, monitor, workflow, teammate, cloud session, MCP task) and scheduled wake-ups. With tasks, state is working while status stays idle.",
+      "properties": {
+        "tasks": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
+        "crons": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "description": "Socket messages on /api/client/ws. Close codes: 4000 refused, 4001 hello was not the first message, 4002 a frame was not JSON, 1011 server error. After welcome the daemon sends a session message for every live session, then one live message."
+}

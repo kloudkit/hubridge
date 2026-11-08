@@ -1,0 +1,5 @@
+{"type":"user","cwd":"__FOLDER__","isSidechain":false,"timestamp":"2026-11-04T08:00:00.000Z","message":{"role":"user","content":"First prompt"}}
+{"type":"system","subtype":"turn_duration","durationMs":10,"isSidechain":false,"timestamp":"2026-11-04T08:00:30.000Z"}
+{"type":"user","cwd":"__FOLDER__","isSidechain":false,"timestamp":"2026-11-04T08:05:00.000Z","message":{"role":"user","content":"<command-name>/clear</command-name>"}}
+{"type":"user","cwd":"__FOLDER__","isSidechain":false,"timestamp":"2026-11-04T08:06:00.000Z","message":{"role":"user","content":[{"type":"text","text":"Second prompt, still running"}]}}
+{"type":"last-prompt","lastPrompt":"Second prompt, still running","sessionId":"22222222-2222-4222-8222-222222222222"}

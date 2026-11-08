@@ -1,0 +1,1 @@
+{"type":"assistant","entrypoint":"cli","cwd":"__BASE__","isSidechain":true,"timestamp":"2026-11-04T09:02:00.000Z","message":{"id":"msg_ws1","role":"assistant","content":[{"type":"tool_use","id":"tu_m","name":"MultiEdit","input":{"file_path":"__BASE__/repo/pkg/y.go","edits":[]}}]}}
