@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-11-08
+
 ### Added
 
 - 🌉 Report Claude Code sessions, live state and usage to hubd over its client protocol, version 1
@@ -14,4 +16,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 🔄 Update with `hubridge update`, and in the background on the saved channel
 - 🔏 Check every update against the release's signed manifest and the protocol hubd speaks
 
-[Unreleased]: https://github.com/kloudkit/hubridge/commits/main
+[Unreleased]: https://github.com/kloudkit/hubridge/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/kloudkit/hubridge/releases/tag/v0.1.0
