@@ -4,13 +4,16 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -340,11 +343,68 @@ func TestUsageIsSentAfterConnectAndOnChange(t *testing.T) {
 	}
 }
 
-func TestRulesRefreshAfterWelcomeAndOnSync(t *testing.T) {
+type fakeRules struct {
+	t    *testing.T
+	fail func(n int) error
+
+	mu       sync.Mutex
+	inflight int
+	at       []time.Time
+	ctxs     []context.Context
+	called   chan struct{}
+}
+
+func (r *fakeRules) refresh(ctx context.Context) error {
+	r.mu.Lock()
+	r.inflight++
+	n := len(r.at)
+	r.at = append(r.at, time.Now())
+	r.ctxs = append(r.ctxs, ctx)
+	overlap := r.inflight > 1
+	r.mu.Unlock()
+	if overlap {
+		r.t.Error("two refreshes ran at once")
+	}
+	time.Sleep(time.Millisecond)
+	r.mu.Lock()
+	r.inflight--
+	r.mu.Unlock()
+	r.called <- struct{}{}
+	return r.fail(n)
+}
+
+func (r *fakeRules) calls() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.at)
+}
+
+func (r *fakeRules) wait(why string) {
+	r.t.Helper()
+	select {
+	case <-r.called:
+	case <-time.After(5 * time.Second):
+		r.t.Fatalf("no refresh %s", why)
+	}
+}
+
+func (p *peer) quiet(d time.Duration) {
+	p.t.Helper()
+	select {
+	case f, ok := <-p.frames:
+		if ok {
+			p.t.Fatalf("want no frame, got %+v", f)
+		}
+	case <-time.After(d):
+	}
+}
+
+func rulesClient(t *testing.T, retry, most time.Duration, fail func(n int) error) (*fakeServer, schematest.Schemas, *fakeRules) {
+	t.Helper()
 	schemas := schematest.Load(t)
 	srv := &fakeServer{t: t, schemas: schemas, peers: make(chan *peer, 4)}
 	ts := httptest.NewServer(srv)
-	defer ts.Close()
+	t.Cleanup(ts.Close)
 	h, err := home.Open(filepath.Join(t.TempDir(), "home"))
 	if err != nil {
 		t.Fatal(err)
@@ -354,50 +414,136 @@ func TestRulesRefreshAfterWelcomeAndOnSync(t *testing.T) {
 	}
 	c := New(ts.URL, "ws", "test", "bundled", h, func() ([]protocol.Summary, protocol.Live) { return nil, protocol.NewLive(nil, nil) }, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	c.Ping = time.Hour
-	refreshed := make(chan struct{}, 4)
-	fail := make(chan error, 1)
-	c.Rules = func(context.Context) error {
-		var err error
-		select {
-		case err = <-fail:
-		default:
-		}
-		refreshed <- struct{}{}
-		return err
-	}
-	waitRefresh := func(why string) {
-		t.Helper()
-		select {
-		case <-refreshed:
-		case <-time.After(5 * time.Second):
-			t.Fatalf("no refresh %s", why)
-		}
-	}
-	go func() { _ = c.Run(t.Context()) }()
+	c.MinBackoff, c.MaxBackoff = 10*time.Millisecond, 10*time.Millisecond
+	c.RulesBackoff, c.RulesMaxBackoff = retry, most
+	r := &fakeRules{t: t, fail: fail, called: make(chan struct{}, 1000)}
+	c.Rules = r.refresh
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		_ = c.Run(ctx)
+		close(done)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		<-done
+	})
+	return srv, schemas, r
+}
 
+func TestRulesRefreshAfterWelcomeAndOnSync(t *testing.T) {
+	srv, schemas, r := rulesClient(t, 10*time.Millisecond, 10*time.Millisecond, func(n int) error {
+		if n == 2 {
+			return errors.New("rules: HTTP 500")
+		}
+		return nil
+	})
 	p := srv.accept(t)
 	p.next(false)
-	fail <- errors.New("hubd unreachable")
 	p.send(schemas, `{"type":"welcome","protocol":1}`)
-	waitRefresh("after welcome")
+	r.wait("after welcome")
 	p.next(true)
 
 	p.send(schemas, `{"type":"command","id":"c1","command":"sync","args":{}}`)
-	waitRefresh("on sync")
+	r.wait("on sync")
 	if f := p.next(true); f.Type != "result" || f.Of != "c1" || !f.OK || f.Error != "" {
 		t.Fatalf("sync result %+v", f)
 	}
 
-	fail <- errors.New("rules: HTTP 500")
 	p.send(schemas, `{"type":"command","id":"c2","command":"sync","args":{}}`)
-	waitRefresh("on the second sync")
+	r.wait("on the second sync")
 	if f := p.next(true); f.Type != "result" || f.Of != "c2" || f.OK || !strings.Contains(f.Error, "rules: HTTP 500") {
 		t.Fatalf("failed sync result %+v", f)
+	}
+	r.wait("to retry the failed sync")
+	p.quiet(100 * time.Millisecond)
+	if n := r.calls(); n != 4 {
+		t.Fatalf("%d refreshes, want 4: the retry did not stop once it succeeded", n)
 	}
 
 	_ = p.conn.Close(websocket.StatusInternalError, "restart")
 	p = srv.accept(t)
 	p.next(false)
 	p.send(schemas, `{"type":"welcome","protocol":1}`)
-	waitRefresh("after the second welcome")
+	r.wait("after the second welcome")
+}
+
+func TestAFailedRefreshRetriesWithBackoff(t *testing.T) {
+	srv, schemas, r := rulesClient(t, 20*time.Millisecond, 50*time.Millisecond, func(n int) error {
+		if n < 4 {
+			return errors.New("hubd unreachable")
+		}
+		return nil
+	})
+	p := srv.accept(t)
+	p.next(false)
+	p.send(schemas, `{"type":"welcome","protocol":1}`)
+	for i := range 5 {
+		r.wait(fmt.Sprintf("for attempt %d", i+1))
+	}
+	time.Sleep(150 * time.Millisecond)
+	r.mu.Lock()
+	at := slices.Clone(r.at)
+	r.mu.Unlock()
+	if len(at) != 5 {
+		t.Fatalf("%d refreshes, want 4 failures and 1 success", len(at))
+	}
+	for i, least := range []time.Duration{20, 40, 50, 50} {
+		if gap := at[i+1].Sub(at[i]); gap < least*time.Millisecond {
+			t.Fatalf("retry %d came after %s, want at least %dms", i+1, gap, least)
+		}
+	}
+}
+
+func TestTheRetriesStopWithTheConnection(t *testing.T) {
+	srv, schemas, r := rulesClient(t, 10*time.Millisecond, 10*time.Millisecond, func(int) error { return errors.New("hubd unreachable") })
+	p := srv.accept(t)
+	p.next(false)
+	p.send(schemas, `{"type":"welcome","protocol":1}`)
+	r.wait("after welcome")
+	r.wait("on the first retry")
+	r.mu.Lock()
+	first := r.ctxs[0]
+	r.mu.Unlock()
+
+	_ = p.conn.Close(websocket.StatusInternalError, "restart")
+	select {
+	case <-first.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("the refresh context outlived the connection")
+	}
+	p = srv.accept(t)
+	p.next(false)
+	before := r.calls()
+	time.Sleep(100 * time.Millisecond)
+	if n := r.calls(); n > before+1 {
+		t.Fatalf("%d refreshes after the connection closed", n-before)
+	}
+
+	p.send(schemas, `{"type":"welcome","protocol":1}`)
+	for r.calls() <= before+1 {
+		r.wait("after the second welcome")
+	}
+	r.mu.Lock()
+	last := r.ctxs[len(r.ctxs)-1]
+	r.mu.Unlock()
+	if last == first || last.Err() != nil {
+		t.Fatal("the new connection did not get its own refresh context")
+	}
+}
+
+func TestTheRulesBackoffStartsAt5sAndCapsAt5m(t *testing.T) {
+	h, err := home.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := New("", "ws", "test", "bundled", h, nil, nil).rulesBackoff()
+	var got []time.Duration
+	for range 9 {
+		got = append(got, b.NextBackOff())
+	}
+	s := time.Second
+	if want := []time.Duration{5 * s, 10 * s, 20 * s, 40 * s, 80 * s, 160 * s, 300 * s, 300 * s, 300 * s}; !slices.Equal(got, want) {
+		t.Fatalf("backoff %v, want %v", got, want)
+	}
 }

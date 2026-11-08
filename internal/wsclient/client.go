@@ -56,9 +56,11 @@ type Client struct {
 	Rules    func(context.Context) error
 	Log      *slog.Logger
 
-	Ping       time.Duration
-	MinBackoff time.Duration
-	MaxBackoff time.Duration
+	Ping            time.Duration
+	MinBackoff      time.Duration
+	MaxBackoff      time.Duration
+	RulesBackoff    time.Duration
+	RulesMaxBackoff time.Duration
 
 	mu     sync.Mutex
 	live   *protocol.Live
@@ -70,6 +72,7 @@ func New(url, machine, version, channel string, h *home.Home, snap Snapshot, log
 	return &Client{
 		URL: url, Machine: machine, Version: version, Channel: channel, Home: h, Queue: h.Queue(), Snapshot: snap, Log: log,
 		Ping: 30 * time.Second, MinBackoff: time.Second, MaxBackoff: time.Minute,
+		RulesBackoff: 5 * time.Second, RulesMaxBackoff: 5 * time.Minute,
 		notify: make(chan struct{}, 1),
 	}
 }
@@ -172,17 +175,15 @@ func (c *Client) connect(ctx context.Context) (bool, error) {
 		return false, fmt.Errorf("expected welcome, got %q", first.Type)
 	}
 	c.Log.Info("connected to hubd", "protocol", first.Protocol)
-	if c.Rules != nil {
-		go func() {
-			if err := c.Rules(ctx); err != nil {
-				c.Log.Warn("refresh the session rules", "err", err)
-			}
-		}()
-	}
 
 	sctx, stop := context.WithCancelCause(ctx)
 	defer stop(nil)
-	go c.reader(sctx, stop, conn)
+	var syncs chan chan error
+	if c.Rules != nil {
+		syncs = make(chan chan error)
+		go c.refresh(sctx, syncs)
+	}
+	go c.reader(sctx, stop, conn, syncs)
 
 	sums, live := c.Snapshot()
 	for _, s := range sums {
@@ -250,7 +251,7 @@ func (c *Client) connect(ctx context.Context) (bool, error) {
 	}
 }
 
-func (c *Client) reader(ctx context.Context, stop context.CancelCauseFunc, conn *websocket.Conn) {
+func (c *Client) reader(ctx context.Context, stop context.CancelCauseFunc, conn *websocket.Conn, syncs chan<- chan error) {
 	for {
 		m, err := c.read(ctx, conn)
 		if err != nil {
@@ -267,7 +268,7 @@ func (c *Client) reader(ctx context.Context, stop context.CancelCauseFunc, conn 
 			stop(ErrRefused)
 			return
 		case "command":
-			if c.command(ctx, conn, m) {
+			if c.command(ctx, conn, m, syncs) {
 				stop(errRotated)
 				return
 			}
@@ -281,7 +282,7 @@ func (c *Client) refused(m protocol.Server) {
 	c.Log.Error("hubd refused this daemon; it waits for an update", "reason", m.Reason, "minProtocol", m.MinProtocol, "maxProtocol", m.MaxProtocol)
 }
 
-func (c *Client) command(ctx context.Context, conn *websocket.Conn, m protocol.Server) bool {
+func (c *Client) command(ctx context.Context, conn *websocket.Conn, m protocol.Server, syncs chan<- chan error) bool {
 	res := protocol.Result{Type: "result", Of: m.ID, OK: true}
 	rotated := false
 	switch m.Command {
@@ -298,8 +299,8 @@ func (c *Client) command(ctx context.Context, conn *websocket.Conn, m protocol.S
 			c.Log.Info("token rotated; reconnecting")
 		}
 	case "sync":
-		if c.Rules != nil {
-			go c.sync(ctx, conn, res)
+		if syncs != nil {
+			go c.sync(ctx, conn, res, syncs)
 			return false
 		}
 		res.OK, res.Error = false, "unsupported command: sync"
@@ -312,9 +313,55 @@ func (c *Client) command(ctx context.Context, conn *websocket.Conn, m protocol.S
 	return rotated
 }
 
-func (c *Client) sync(ctx context.Context, conn *websocket.Conn, res protocol.Result) {
-	if err := c.Rules(ctx); err != nil {
-		res.OK, res.Error = false, "sync the session rules: "+err.Error()
+func (c *Client) rulesBackoff() *backoff.ExponentialBackOff {
+	b := &backoff.ExponentialBackOff{InitialInterval: c.RulesBackoff, Multiplier: 2, MaxInterval: c.RulesMaxBackoff}
+	b.Reset()
+	return b
+}
+
+// refresh is the one goroutine per connection that calls Rules, so a retry and a sync never run at once.
+func (c *Client) refresh(ctx context.Context, syncs <-chan chan error) {
+	wait := c.rulesBackoff()
+	var reply chan error
+	for {
+		err := c.Rules(ctx)
+		if reply != nil {
+			reply <- err
+			reply = nil
+		}
+		var retry <-chan time.Time
+		switch {
+		case ctx.Err() != nil:
+			return
+		case err != nil:
+			next := wait.NextBackOff()
+			c.Log.Warn("refresh the instructions", "err", err, "retry", next)
+			retry = time.After(next)
+		default:
+			wait.Reset()
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-retry:
+		case reply = <-syncs:
+		}
+	}
+}
+
+func (c *Client) sync(ctx context.Context, conn *websocket.Conn, res protocol.Result, syncs chan<- chan error) {
+	reply := make(chan error, 1)
+	select {
+	case syncs <- reply:
+	case <-ctx.Done():
+		return
+	}
+	err := <-reply
+	if ctx.Err() != nil {
+		return
+	}
+	if err != nil {
+		res.OK, res.Error = false, "sync the instructions: "+err.Error()
 	}
 	if err := c.write(ctx, conn, res); err != nil {
 		c.Log.Warn("send result", "err", err)
