@@ -273,7 +273,11 @@ func run(args []string) error {
 	if dir, err := rules.Dir(); err != nil {
 		log.Warn("no Claude config dir, so hubd's instructions are not written", "err", err)
 	} else {
-		client.Rules = rules.New(cfg.URL, cfg.Machine, h, dir, log).Refresh
+		mirror := rules.New(cfg.URL, cfg.Machine, h, dir, log)
+		if err := mirror.Restore(); err != nil {
+			log.Warn("restore the instructions from the manifest", "err", err)
+		}
+		client.Rules = mirror.Refresh
 	}
 	watchErr := make(chan error, 1)
 	go func() { watchErr <- tracker.Watch(ctx, client, sessions.DefaultIntervals) }()

@@ -40,8 +40,43 @@ type File struct {
 }
 
 type Manifest struct {
-	ETag  string            `json:"etag"`
-	Files map[string]string `json:"files"`
+	ETag  string           `json:"etag"`
+	Files map[string]Entry `json:"files"`
+}
+
+type Entry struct {
+	SHA256 string  `json:"sha256"`
+	Body   *string `json:"body,omitempty"`
+}
+
+// UnmarshalJSON also reads a v0.2.0 entry, which is a bare sha256 with no body.
+func (e *Entry) UnmarshalJSON(b []byte) error {
+	var sum string
+	if json.Unmarshal(b, &sum) == nil {
+		*e = Entry{SHA256: sum}
+		return nil
+	}
+	type plain Entry
+	return json.Unmarshal(b, (*plain)(e))
+}
+
+func entry(body []byte) Entry {
+	s := string(body)
+	return Entry{SHA256: digest(body), Body: &s}
+}
+
+func (e Entry) same(o Entry) bool {
+	return e.SHA256 == o.SHA256 && (e.Body == nil) == (o.Body == nil)
+}
+
+func (m Manifest) Unrestorable() []string {
+	var out []string
+	for _, name := range slices.Sorted(maps.Keys(m.Files)) {
+		if m.Files[name].Body == nil {
+			out = append(out, name)
+		}
+	}
+	return out
 }
 
 type Answer struct {
@@ -138,7 +173,7 @@ func writeFile(dir, name string, body []byte) error {
 
 // Write leaves alone every file prev does not list, even one named like a wanted file.
 func Write(dir string, files []File, etag string, prev Manifest, log *slog.Logger) (Manifest, error) {
-	next := Manifest{ETag: etag, Files: map[string]string{}}
+	next := Manifest{ETag: etag, Files: map[string]Entry{}}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return prev, err
 	}
@@ -171,7 +206,7 @@ func Write(dir string, files []File, etag string, prev Manifest, log *slog.Logge
 				continue
 			}
 		}
-		next.Files[name] = digest(body)
+		next.Files[name] = entry(body)
 	}
 	for _, name := range slices.Sorted(maps.Keys(prev.Files)) {
 		if _, ok := want[name]; ok || !namePattern.MatchString(name) {
@@ -189,7 +224,7 @@ func Write(dir string, files []File, etag string, prev Manifest, log *slog.Logge
 }
 
 func ReadManifest(path string) (Manifest, bool, error) {
-	m := Manifest{Files: map[string]string{}}
+	m := Manifest{Files: map[string]Entry{}}
 	b, err := os.ReadFile(path)
 	if errors.Is(err, fs.ErrNotExist) {
 		return m, false, nil
@@ -201,7 +236,7 @@ func ReadManifest(path string) (Manifest, bool, error) {
 		return m, true, fmt.Errorf("%s: %w", path, err)
 	}
 	if m.Files == nil {
-		m.Files = map[string]string{}
+		m.Files = map[string]Entry{}
 	}
 	return m, true, nil
 }
@@ -231,6 +266,47 @@ func New(url, machine string, h *home.Home, dir string, log *slog.Logger) *Mirro
 
 func (m *Mirror) manifestPath() string { return m.Home.Path(ManifestFile) }
 
+func (m *Mirror) Restore() error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	prev, found, err := ReadManifest(m.manifestPath())
+	if !found || err != nil {
+		return err
+	}
+	var restored, waiting []string
+	var errs []error
+	for _, name := range slices.Sorted(maps.Keys(prev.Files)) {
+		e := prev.Files[name]
+		cur, err := os.ReadFile(filepath.Join(m.Dir, name))
+		switch {
+		case !namePattern.MatchString(name):
+		case e.Body == nil:
+			if err != nil || digest(cur) != e.SHA256 {
+				waiting = append(waiting, name)
+			}
+		case err == nil && string(cur) == *e.Body:
+		case err != nil && !errors.Is(err, fs.ErrNotExist):
+			errs = append(errs, err)
+		default:
+			if err := os.MkdirAll(m.Dir, 0o755); err != nil {
+				return errors.Join(append(errs, err)...)
+			}
+			if err := writeFile(m.Dir, name, []byte(*e.Body)); err != nil {
+				errs = append(errs, err)
+				continue
+			}
+			restored = append(restored, name)
+		}
+	}
+	if len(restored) > 0 {
+		m.Log.Info("instructions restored from the manifest", "dir", m.Dir, "files", restored)
+	}
+	if len(waiting) > 0 {
+		m.Log.Info("the manifest keeps no body for these instructions, so they wait for hubd", "dir", m.Dir, "files", waiting)
+	}
+	return errors.Join(errs...)
+}
+
 func (m *Mirror) Refresh(ctx context.Context) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -253,11 +329,11 @@ func (m *Mirror) Refresh(ctx context.Context) error {
 	return m.apply(ans.Files, ans.ETag, prev, !found)
 }
 
-// intact reports whether every listed file is still on disk as written, so a 304 cannot leave a deleted or edited file unrepaired.
+// intact reports whether every listed file is still on disk as written and has its body kept, so a 304 can leave neither a deleted or edited file unrepaired nor a v0.2.0 manifest without bodies.
 func (m *Mirror) intact(prev Manifest) bool {
-	for name, sum := range prev.Files {
+	for name, e := range prev.Files {
 		b, err := os.ReadFile(filepath.Join(m.Dir, name))
-		if err != nil || digest(b) != sum {
+		if e.Body == nil || err != nil || digest(b) != e.SHA256 {
 			return false
 		}
 	}
@@ -266,8 +342,8 @@ func (m *Mirror) intact(prev Manifest) bool {
 
 func (m *Mirror) apply(files []File, etag string, prev Manifest, save bool) error {
 	next, err := Write(m.Dir, files, etag, prev, m.Log)
-	changed := !maps.Equal(next.Files, prev.Files)
-	if save || changed || next.ETag != prev.ETag {
+	changed := !maps.EqualFunc(next.Files, prev.Files, func(a, b Entry) bool { return a.SHA256 == b.SHA256 })
+	if save || next.ETag != prev.ETag || !maps.EqualFunc(next.Files, prev.Files, Entry.same) {
 		if werr := writeManifest(m.manifestPath(), next); werr != nil {
 			return errors.Join(err, werr)
 		}

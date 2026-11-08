@@ -2,6 +2,7 @@ package rules
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -145,7 +146,7 @@ func TestOKWritesThenRemovesOnlyWhatWasDropped(t *testing.T) {
 		t.Fatalf("file mode %o", st.Mode().Perm())
 	}
 	m := f.manifest(t)
-	if m.ETag != `"v1"` || len(m.Files) != 2 || m.Files["pinned.md"] != digest([]byte("# Pinned\n")) {
+	if e := m.Files["pinned.md"]; m.ETag != `"v1"` || len(m.Files) != 2 || e.SHA256 != digest([]byte("# Pinned\n")) || e.Body == nil || *e.Body != "# Pinned\n" {
 		t.Fatalf("manifest %+v", m)
 	}
 	pinned, _ := os.Stat(filepath.Join(f.dir, "pinned.md"))
@@ -343,5 +344,160 @@ func TestRefreshesNeverOverlap(t *testing.T) {
 	wg.Wait()
 	if most != 1 {
 		t.Fatalf("%d refreshes ran at once", most)
+	}
+}
+
+func (f *fixture) write(t *testing.T, name, body string) {
+	t.Helper()
+	if err := os.MkdirAll(f.dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(f.dir, name), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func (f *fixture) restart() *Mirror {
+	return New("http://127.0.0.1:1", f.mirror.Machine, f.mirror.Home, f.dir, f.mirror.Log)
+}
+
+func TestRestoreRewritesListedFilesWithoutHubd(t *testing.T) {
+	f := setup(t)
+	f.srv.answer(http.StatusOK, `"v1"`, `{"files":[{"name":"gone.md","body":"# Gone\n"},{"name":"edited.md","body":"# Edited\n"},{"name":"kept.md","body":"# Kept\n"},{"name":"empty.md","body":""}]}`)
+	f.refresh(t)
+	requests := len(f.srv.seen)
+	manifest, _ := os.Stat(f.mirror.Home.Path(ManifestFile))
+	kept, _ := os.Stat(filepath.Join(f.dir, "kept.md"))
+	if err := os.Remove(filepath.Join(f.dir, "gone.md")); err != nil {
+		t.Fatal(err)
+	}
+	f.write(t, "edited.md", "# Edited by hand\n")
+	f.write(t, "foreign.md", "not hubridge's")
+	f.logs.Reset()
+
+	if err := f.restart().Restore(); err != nil {
+		t.Fatal(err)
+	}
+	want(t, f.files(t), "edited.md", "empty.md", "foreign.md", "gone.md", "kept.md")
+	if f.read(t, "gone.md") != "# Gone\n" || f.read(t, "edited.md") != "# Edited\n" || f.read(t, "foreign.md") != "not hubridge's" {
+		t.Fatal("restore did not bring back the stored bodies, or touched a foreign file")
+	}
+	if again, _ := os.Stat(filepath.Join(f.dir, "kept.md")); !os.SameFile(kept, again) {
+		t.Fatal("restore rewrote an intact file")
+	}
+	if m, _ := os.Stat(f.mirror.Home.Path(ManifestFile)); !os.SameFile(manifest, m) {
+		t.Fatal("restore rewrote the manifest")
+	}
+	if logs := f.logs.String(); !strings.Contains(logs, "files=\"[edited.md gone.md]\"") {
+		t.Fatalf("the restored files were not logged: %s", logs)
+	}
+
+	if err := os.RemoveAll(f.dir); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.restart().Restore(); err != nil {
+		t.Fatal(err)
+	}
+	want(t, f.files(t), "edited.md", "empty.md", "gone.md", "kept.md")
+	if st, _ := os.Stat(filepath.Join(f.dir, "kept.md")); st.Mode().Perm() != 0o644 {
+		t.Fatalf("file mode %o", st.Mode().Perm())
+	}
+	if len(f.srv.seen) != requests {
+		t.Fatalf("restore called hubd: %d requests", len(f.srv.seen)-requests)
+	}
+
+	f.srv.answer(http.StatusNotModified, "", "")
+	f.refresh(t)
+	if f.srv.last().Header.Get("If-None-Match") != `"v1"` {
+		t.Fatal("a restored dir did not send the stored ETag")
+	}
+}
+
+func TestRestoreWithoutAManifestDoesNothing(t *testing.T) {
+	f := setup(t)
+	if err := f.mirror.Restore(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(f.dir); err == nil {
+		t.Fatal("restore made the rules dir with no manifest")
+	}
+	if _, found, _ := ReadManifest(f.mirror.Home.Path(ManifestFile)); found {
+		t.Fatal("restore wrote a manifest")
+	}
+}
+
+func TestRestoreSkipsNamesOutsideTheDir(t *testing.T) {
+	f := setup(t)
+	if err := home.WriteFile(f.mirror.Home.Path(ManifestFile), []byte(`{"etag":"","files":{"../escape.md":{"sha256":"x","body":"x"}}}`)); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.mirror.Restore(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(filepath.Dir(f.dir), "escape.md")); err == nil {
+		t.Fatal("a name escaped the rules dir")
+	}
+}
+
+func TestAV020ManifestIsRead(t *testing.T) {
+	f := setup(t)
+	f.write(t, "pinned.md", "x")
+	f.write(t, "dropped.md", "y")
+	legacy := fmt.Sprintf(`{"etag":"\"v1\"","files":{"pinned.md":%q,"dropped.md":%q}}`, digest([]byte("x")), digest([]byte("y")))
+	if err := home.WriteFile(f.mirror.Home.Path(ManifestFile), []byte(legacy)); err != nil {
+		t.Fatal(err)
+	}
+	m := f.manifest(t)
+	if e := m.Files["pinned.md"]; m.ETag != `"v1"` || e.SHA256 != digest([]byte("x")) || e.Body != nil {
+		t.Fatalf("manifest %+v", m)
+	}
+	if got := m.Unrestorable(); !slices.Equal(got, []string{"dropped.md", "pinned.md"}) {
+		t.Fatalf("unrestorable %v", got)
+	}
+
+	if err := os.Remove(filepath.Join(f.dir, "pinned.md")); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.restart().Restore(); err != nil {
+		t.Fatal(err)
+	}
+	want(t, f.files(t), "dropped.md")
+	if !strings.Contains(f.logs.String(), "pinned.md") {
+		t.Fatal("the file restore could not write was not logged")
+	}
+	f.write(t, "pinned.md", "x")
+	pinned, _ := os.Stat(filepath.Join(f.dir, "pinned.md"))
+
+	f.srv.answer(http.StatusOK, `"v1"`, `{"files":[{"name":"pinned.md","body":"x"}]}`)
+	f.refresh(t)
+	if f.srv.last().Header.Get("If-None-Match") != "" {
+		t.Fatal("If-None-Match sent while the manifest keeps no bodies")
+	}
+	want(t, f.files(t), "pinned.md")
+	if again, _ := os.Stat(filepath.Join(f.dir, "pinned.md")); !os.SameFile(pinned, again) {
+		t.Fatal("an unchanged file was rewritten")
+	}
+	raw, err := os.ReadFile(f.mirror.Home.Path(ManifestFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stored struct {
+		ETag  string `json:"etag"`
+		Files map[string]struct {
+			SHA256 string `json:"sha256"`
+			Body   string `json:"body"`
+		} `json:"files"`
+	}
+	if err := json.Unmarshal(raw, &stored); err != nil {
+		t.Fatalf("the manifest is not in the new shape: %v", err)
+	}
+	if e := stored.Files["pinned.md"]; stored.ETag != `"v1"` || len(stored.Files) != 1 || e.SHA256 != digest([]byte("x")) || e.Body != "x" {
+		t.Fatalf("manifest %s", raw)
+	}
+
+	f.srv.answer(http.StatusNotModified, "", "")
+	f.refresh(t)
+	if f.srv.last().Header.Get("If-None-Match") != `"v1"` {
+		t.Fatal("the ETag is not sent once the manifest keeps the bodies")
 	}
 }

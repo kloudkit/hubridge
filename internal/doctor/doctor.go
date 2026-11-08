@@ -299,11 +299,18 @@ func CheckRules(r *Report, homeDir string) {
 		}
 	}
 	listed := strings.Join(names, ", ")
-	if listed == "" {
+	lacking := m.Unrestorable()
+	switch {
+	case listed == "":
 		listed = "no files"
+	case len(lacking) == 0:
+		listed += "; restorable offline"
 	}
 	r.add(OK, "rules", "%s: %s", dir, listed)
+	if len(lacking) > 0 {
+		r.add(Info, "rules", "no body kept for %s, so not restorable offline until the next refresh stores it", strings.Join(lacking, ", "))
+	}
 	if len(missing) > 0 {
-		r.add(Info, "rules", "not on disk: %s; the next refresh restores what hubd still wants", strings.Join(missing, ", "))
+		r.add(Info, "rules", "not on disk: %s; the daemon writes it back when it starts or refreshes", strings.Join(missing, ", "))
 	}
 }
