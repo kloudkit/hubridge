@@ -1,6 +1,6 @@
 # KloudKIT • hubridge
 
-> 🌉 Bridges a machine's Claude Code sessions to hubd
+> 🌉 Your bridge to mission control
 
 Install it with the command in hubd's Settings › Access:
 
