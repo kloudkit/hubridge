@@ -55,11 +55,10 @@ bin="$HOME_DIR/bin/hubridge"
 [ -f "$bin" ] && mv -f "$bin" "$bin.prev"
 mv -f "$tmp" "$bin"
 ok "Installed hubd's bundled build for $os/$arch $D(${size} MB, checksum verified)$R"
-set -- enroll --home "$HOME_DIR" --url "$HUBD_URL"
-[ -n "$MACHINE" ] && set -- "$@" --machine "$MACHINE"
-[ -n "$CODE" ] && set -- "$@" --code "$CODE"
-[ -n "$TOKEN_FILE" ] && set -- "$@" --token-file "$TOKEN_FILE"
+set -- enroll --home "$HOME_DIR" --url "$HUBD_URL" --machine "$MACHINE" --code "$CODE" --token-file "$TOKEN_FILE"
 if [ -n "$CODE" ]; then run "Enrolled with the install code" "$bin" "$@"; else run "Kept the installed token" "$bin" "$@"; fi
+machine=${out#enrolled as }
+machine=${machine%%;*}
 if [ -n "$VERSION" ]; then
   run "Set the update channel to $VERSION" "$bin" update --home "$HOME_DIR" --version "$VERSION"
 else
@@ -67,5 +66,4 @@ else
 fi
 run "Set up Claude Code (hooks and the hubd MCP server)" "$bin" setup --home "$HOME_DIR"
 run "Started the client daemon" "$bin" supervise --detach --home "$HOME_DIR"
-machine=$(sed -n 's/.*"machine" *: *"\([^"]*\)".*/\1/p' "$HOME_DIR/config.json" 2>/dev/null)
-printf '\n  %sDone.%s %s%s%s is connected to hubd %s(hubridge %s, %s)%s\n\n' "$B" "$R" "$A" "${machine:-this machine}" "$R" "$D" "$("$bin" version --home "$HOME_DIR")" "$HOME_DIR" "$R"
+printf '\n  %sDone.%s %s%s%s is connected to hubd %s(hubridge %s, %s)%s\n\n' "$B" "$R" "$A" "$machine" "$R" "$D" "$("$bin" version --home "$HOME_DIR")" "$HOME_DIR" "$R"

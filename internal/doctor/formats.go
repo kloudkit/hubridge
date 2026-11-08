@@ -1,4 +1,4 @@
-package formats
+package doctor
 
 const SeenIn = "2.1.318"
 
@@ -32,11 +32,7 @@ var RegistryFields = []string{
 	"pidDomain", "name", "status", "updatedAt", "statusUpdatedAt",
 }
 
-var RegistryStatuses = set("busy", "shell", "waiting", "idle")
-
 var AgentFields = []string{"cwd", "kind", "startedAt"}
-
-var AgentStatuses = set("busy", "waiting", "idle")
 
 var JobStates = set("working", "blocked", "done", "failed", "stopped")
 

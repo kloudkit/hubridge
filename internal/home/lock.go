@@ -1,7 +1,6 @@
 package home
 
 import (
-	"errors"
 	"fmt"
 	"os"
 	"strconv"
@@ -10,11 +9,7 @@ import (
 	"github.com/gofrs/flock"
 )
 
-var ErrLocked = errors.New("another daemon holds the lock")
-
 type Lock struct{ f *flock.Flock }
-
-func (h *Home) Lock() (*Lock, error) { return h.LockFile("daemon.lock") }
 
 func (h *Home) Held(name string) bool {
 	f := flock.New(h.Path(name))
@@ -36,7 +31,7 @@ func (h *Home) LockFile(name string) (*Lock, error) {
 		return nil, err
 	}
 	if !got {
-		return nil, fmt.Errorf("%w (pid %s)", ErrLocked, holder(path))
+		return nil, fmt.Errorf("another daemon holds the lock (pid %s)", holder(path))
 	}
 	if err := os.WriteFile(path, []byte(strconv.Itoa(os.Getpid())+"\n"), 0o600); err != nil {
 		f.Unlock()

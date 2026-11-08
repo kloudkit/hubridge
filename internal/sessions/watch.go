@@ -2,7 +2,6 @@ package sessions
 
 import (
 	"context"
-	"errors"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -10,8 +9,6 @@ import (
 	"time"
 
 	"github.com/fsnotify/fsnotify"
-
-	"github.com/kloudkit/hubridge/internal/registry"
 )
 
 type Intervals struct {
@@ -33,20 +30,25 @@ func (t *Tracker) Watch(ctx context.Context, sink Sink, iv Intervals) error {
 		return err
 	}
 	defer w.Close()
-	addTree := func(root string) {
+	dirty := map[string]bool{}
+	addTree := func(root string, fresh bool) {
 		filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
-			if err == nil && d.IsDir() {
+			switch {
+			case err != nil:
+			case d.IsDir():
 				if err := w.Add(p); err != nil {
 					t.Log.Warn("watch", "path", p, "err", err)
 				}
+			case fresh && strings.HasSuffix(p, ".jsonl"):
+				dirty[p] = true
 			}
 			return nil
 		})
 	}
-	addTree(t.Root)
+	addTree(t.Root, false)
 	regDir, regWatched := "", false
 	watchRegistry := func() {
-		if t.Registry == nil || regWatched || !t.Registry.Available() {
+		if regWatched || !t.Registry.Available() {
 			return
 		}
 		if err := w.Add(t.Registry.Dir); err != nil {
@@ -58,10 +60,10 @@ func (t *Tracker) Watch(ctx context.Context, sink Sink, iv Intervals) error {
 	watchRegistry()
 
 	reconciled := make(chan error, 1)
-	inFlight, warned := false, false
+	inFlight := false
 	var lastReconcile time.Time
 	reconcile := func() {
-		if t.Registry == nil || inFlight {
+		if t.Registry.Claude == "" || inFlight {
 			return
 		}
 		inFlight, lastReconcile = true, time.Now()
@@ -69,14 +71,13 @@ func (t *Tracker) Watch(ctx context.Context, sink Sink, iv Intervals) error {
 	}
 	reconcile()
 	var reconcileC <-chan time.Time
-	if t.Registry != nil && iv.Reconcile > 0 {
+	if iv.Reconcile > 0 {
 		tick := time.NewTicker(iv.Reconcile)
 		defer tick.Stop()
 		reconcileC = tick.C
 	}
 	t.Emit(sink, t.Scan())
 
-	dirty := map[string]bool{}
 	regDirty := false
 	pending := false
 	debounce := time.NewTimer(time.Hour)
@@ -96,13 +97,7 @@ func (t *Tracker) Watch(ctx context.Context, sink Sink, iv Intervals) error {
 			}
 			if ev.Has(fsnotify.Create) {
 				if st, err := os.Stat(ev.Name); err == nil && st.IsDir() {
-					addTree(ev.Name)
-					filepath.WalkDir(ev.Name, func(p string, d fs.DirEntry, err error) error {
-						if err == nil && !d.IsDir() && strings.HasSuffix(p, ".jsonl") {
-							dirty[p] = true
-						}
-						return nil
-					})
+					addTree(ev.Name, true)
 				}
 			}
 			if strings.HasSuffix(ev.Name, ".jsonl") && (ev.Has(fsnotify.Create) || ev.Has(fsnotify.Write)) {
@@ -139,21 +134,16 @@ func (t *Tracker) Watch(ctx context.Context, sink Sink, iv Intervals) error {
 			}
 		case err := <-reconciled:
 			inFlight = false
-			if err != nil && (!errors.Is(err, registry.ErrNoClaude) || !warned) {
-				warned = warned || errors.Is(err, registry.ErrNoClaude)
+			if err != nil {
 				t.Log.Warn("claude agents --json", "err", err)
 			}
 			t.EmitLive(sink)
 		case <-reconcileC:
 			reconcile()
 		case <-liveness.C:
-			if t.Registry != nil {
-				t.EmitLive(sink)
-			} else {
-				t.EmitAll(sink)
-			}
+			t.EmitLive(sink)
 		case <-rescan.C:
-			addTree(t.Root)
+			addTree(t.Root, false)
 			watchRegistry()
 			t.Emit(sink, t.Scan())
 		}

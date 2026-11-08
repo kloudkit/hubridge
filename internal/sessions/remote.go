@@ -2,7 +2,6 @@ package sessions
 
 import (
 	"net/url"
-	"strings"
 
 	"github.com/go-git/go-git/v5"
 )
@@ -20,9 +19,6 @@ func originURL(root string) string {
 }
 
 func withoutCredentials(remote string) string {
-	if !strings.Contains(remote, "://") {
-		return remote
-	}
 	u, err := url.Parse(remote)
 	if err != nil || u.User == nil {
 		return remote

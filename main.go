@@ -1,11 +1,11 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"flag"
 	"fmt"
-	"io"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -19,7 +19,6 @@ import (
 	"github.com/kloudkit/hubridge/internal/install"
 	"github.com/kloudkit/hubridge/internal/proc"
 	"github.com/kloudkit/hubridge/internal/protocol"
-	"github.com/kloudkit/hubridge/internal/registry"
 	"github.com/kloudkit/hubridge/internal/sessions"
 	"github.com/kloudkit/hubridge/internal/update"
 	"github.com/kloudkit/hubridge/internal/usage"
@@ -34,7 +33,7 @@ commands:
   run          watch transcripts and stream them to hubd (default)
   enroll       --url <hubd> (--code <code> | --token-file <path>) [--machine <name>]
   setup        add the hubd hooks to Claude Code's settings.json and wrap its status line (--remove undoes both)
-  hook         session-start | notification | stop, run by Claude Code
+  hook         session-start | stop, run by Claude Code
   supervise    restart loop for run (--detach to background it)
   mcp-headers  print the Authorization header for Claude Code's MCP headersHelper
   statusline   run by Claude Code as its status line: keep the usage reading, then run the original
@@ -90,16 +89,19 @@ func main() {
 	}
 }
 
-func flags(name string) (*flag.FlagSet, *string) {
-	fs := flag.NewFlagSet(name, flag.ExitOnError)
+func parse(name string, args []string, mode flag.ErrorHandling, open bool, define func(*flag.FlagSet)) (*home.Home, error) {
+	fs := flag.NewFlagSet(name, mode)
 	fs.Usage = func() { fmt.Fprint(os.Stderr, help) }
-	return fs, fs.String("home", "", "client home")
-}
-
-func openHome(flagValue string) (*home.Home, error) {
-	dir, err := home.Resolve(flagValue)
-	if err != nil {
+	homeFlag := fs.String("home", "", "client home")
+	if define != nil {
+		define(fs)
+	}
+	if err := fs.Parse(args); err != nil {
 		return nil, err
+	}
+	dir, err := home.Resolve(*homeFlag)
+	if err != nil || !open {
+		return &home.Home{Dir: dir}, err
 	}
 	return home.Open(dir)
 }
@@ -112,29 +114,29 @@ func self() string {
 }
 
 func enroll(args []string) error {
-	fs, homeFlag := flags("enroll")
 	var o install.EnrollOptions
-	fs.StringVar(&o.URL, "url", "", "hubd origin")
-	fs.StringVar(&o.Code, "code", "", "one-time install code")
-	fs.StringVar(&o.TokenFile, "token-file", "", "file holding a token")
-	fs.StringVar(&o.Machine, "machine", "", "this machine's name")
-	fs.Parse(args)
-	h, err := openHome(*homeFlag)
+	h, err := parse("enroll", args, flag.ExitOnError, true, func(fs *flag.FlagSet) {
+		fs.StringVar(&o.URL, "url", "", "hubd origin")
+		fs.StringVar(&o.Code, "code", "", "one-time install code")
+		fs.StringVar(&o.TokenFile, "token-file", "", "file holding a token")
+		fs.StringVar(&o.Machine, "machine", "", "this machine's name")
+	})
 	if err != nil {
 		return err
 	}
 	if err := install.Enroll(h, o); err != nil {
 		return err
 	}
-	fmt.Println("enrolled; token and config are in", h.Dir)
+	cfg, _ := h.Config()
+	fmt.Printf("enrolled as %s; token and config are in %s\n", cfg.Machine, h.Dir)
 	return nil
 }
 
 func setup(args []string) error {
-	fs, homeFlag := flags("setup")
-	remove := fs.Bool("remove", false, "take the hubd hooks out")
-	fs.Parse(args)
-	dir, err := home.Resolve(*homeFlag)
+	var remove bool
+	h, err := parse("setup", args, flag.ExitOnError, false, func(fs *flag.FlagSet) {
+		fs.BoolVar(&remove, "remove", false, "take the hubd hooks out")
+	})
 	if err != nil {
 		return err
 	}
@@ -142,25 +144,24 @@ func setup(args []string) error {
 	if err != nil {
 		return err
 	}
-	if err := install.Setup(path, dir, *remove); err != nil {
+	if err := install.Setup(path, h.Dir, remove); err != nil {
 		return err
 	}
 	fmt.Println("updated", path)
-	if *remove {
-		if err := install.UnwrapStatusLine(path, dir); err != nil {
+	if remove {
+		if err := install.UnwrapStatusLine(path, h.Dir); err != nil {
 			return err
 		}
 		return install.UnregisterMCP(os.Stdout)
 	}
-	wrapped, err := install.WrapStatusLine(path, dir)
+	wrapped, err := install.WrapStatusLine(path, h.Dir)
 	if err != nil {
 		return err
 	}
 	if wrapped {
 		fmt.Println("wrapped the status line, to read Claude usage")
 	}
-	h, err := home.Open(dir)
-	if err != nil {
+	if h, err = home.Open(h.Dir); err != nil {
 		return err
 	}
 	cfg, _ := h.Config()
@@ -168,30 +169,23 @@ func setup(args []string) error {
 		fmt.Println("no hubd url in config.json yet, so hubd's MCP server was not registered; run enroll, then setup again")
 		return nil
 	}
-	return install.RegisterMCP(dir, cfg.URL, os.Stdout)
+	return install.RegisterMCP(h.Dir, cfg.URL, os.Stdout)
 }
 
 func statusLine(args []string) int {
-	fs, homeFlag := flags("statusline")
-	fs.Init("statusline", flag.ContinueOnError)
-	if fs.Parse(args) != nil {
-		return 0
-	}
-	dir, err := home.Resolve(*homeFlag)
+	h, err := parse("statusline", args, flag.ContinueOnError, false, nil)
 	if err != nil {
 		return 0
 	}
-	return install.RunStatusLine(context.Background(), &home.Home{Dir: dir}, os.Stdin, os.Stdout, os.Stderr, time.Now())
+	return install.RunStatusLine(context.Background(), h, os.Stdin, os.Stdout, os.Stderr, time.Now())
 }
 
 func mcpHeaders(args []string) error {
-	fs, homeFlag := flags("mcp-headers")
-	fs.Parse(args)
-	dir, err := home.Resolve(*homeFlag)
+	h, err := parse("mcp-headers", args, flag.ExitOnError, false, nil)
 	if err != nil {
 		return err
 	}
-	return install.Headers(&home.Home{Dir: dir}, os.Stdout)
+	return install.Headers(h, os.Stdout)
 }
 
 func hook(args []string) {
@@ -199,12 +193,7 @@ func hook(args []string) {
 		return
 	}
 	event := args[0]
-	fs, homeFlag := flags("hook")
-	fs.Init("hook", flag.ContinueOnError)
-	if fs.Parse(args[1:]) != nil {
-		return
-	}
-	h, err := openHome(*homeFlag)
+	h, err := parse("hook", args[1:], flag.ContinueOnError, true, nil)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "hubridge hook:", err)
 		return
@@ -214,11 +203,12 @@ func hook(args []string) {
 		wait = install.StopWait
 	}
 	in := install.ReadInputWait(os.Stdin, wait)
+	if in.SessionID == "" {
+		return
+	}
 	switch event {
 	case "session-start":
-		err = install.SessionStart(h, in, install.Parent(), proc.Lookup, func() error { return install.Detach(h, self()) })
-	case "notification":
-		err = install.Notification(h, in, time.Now())
+		err = install.SessionStart(h, func() error { return install.Detach(h, self()) })
 	case "stop":
 		err = install.Stop(h, in, time.Now())
 	}
@@ -228,14 +218,14 @@ func hook(args []string) {
 }
 
 func supervise(args []string) error {
-	fs, homeFlag := flags("supervise")
-	detach := fs.Bool("detach", false, "run in the background and return")
-	fs.Parse(args)
-	h, err := openHome(*homeFlag)
+	var detach bool
+	h, err := parse("supervise", args, flag.ExitOnError, true, func(fs *flag.FlagSet) {
+		fs.BoolVar(&detach, "detach", false, "run in the background and return")
+	})
 	if err != nil {
 		return err
 	}
-	if *detach {
+	if detach {
 		if h.Held("supervisor.lock") {
 			return nil
 		}
@@ -252,19 +242,15 @@ func supervise(args []string) error {
 }
 
 func run(args []string) error {
-	fs, homeFlag := flags("run")
-	projects := fs.String("projects", "", "Claude Code transcripts root (default ~/.claude/projects)")
-	fs.Parse(args)
-	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
-
-	h, err := openHome(*homeFlag)
+	var projects string
+	h, err := parse("run", args, flag.ExitOnError, true, func(fs *flag.FlagSet) {
+		fs.StringVar(&projects, "projects", projectsDir(), "Claude Code transcripts root")
+	})
 	if err != nil {
 		return err
 	}
-	if *projects == "" {
-		*projects = projectsDir()
-	}
-	lock, err := h.Lock()
+	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	lock, err := h.LockFile("daemon.lock")
 	if err != nil {
 		return err
 	}
@@ -277,63 +263,46 @@ func run(args []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	tracker := sessions.New(*projects, h.Handovers, log)
-	tracker.Waiting, tracker.Clear = h.Waiting, h.ClearWaiting
+	tracker := sessions.New(projects, log)
 	tracker.Background, tracker.ClearBackground = h.Backgrounds, h.ClearBackground
-	tracker.Registry = registry.New(registryDir(*projects))
 	if tracker.Registry.Claude == "" {
 		log.Warn("claude not found on PATH: live state comes from the registry files alone, with no waiting reasons or background sessions")
 	}
 	client := wsclient.New(cfg.URL, cfg.Machine, version, cfg.Channel, h, tracker.Snapshot, log)
 	watchErr := make(chan error, 1)
 	go func() { watchErr <- tracker.Watch(ctx, client, sessions.DefaultIntervals) }()
-	go usage.Watch(ctx, h, client.Usage, tracker.AnyLive, probe(h.Dir), log, usage.DefaultIntervals, time.Now)
+	go usage.Watch(ctx, h, client.Usage, tracker.AnyLive, probe(h.Dir), log, usage.DefaultIntervals)
 	go rewrap(ctx, h, log)
 	kick := make(chan struct{}, 1)
 	go autoUpdate(ctx, h, cfg.Channel, kick, log)
 
-	log.Info("hubridge started", "version", version, "channel", cfg.Channel, "home", h.Dir, "projects", *projects, "machine", cfg.Machine)
-	err = client.Run(ctx)
-	if errors.Is(err, wsclient.ErrRevoked) {
-		log.Error(err.Error())
-		stop()
-		<-watchErr
-		return err
-	}
-	if errors.Is(err, wsclient.ErrRefused) {
+	log.Info("hubridge started", "version", version, "channel", cfg.Channel, "home", h.Dir, "projects", projects, "machine", cfg.Machine)
+	if err = client.Run(ctx); errors.Is(err, wsclient.ErrRefused) {
 		log.Error("not reconnecting until the daemon is updated")
 		kick <- struct{}{}
 		select {
 		case <-ctx.Done():
+			err = nil
 		case err = <-watchErr:
 			return err
 		}
-		return nil
 	}
 	stop()
-	if werr := <-watchErr; werr != nil {
-		return werr
-	}
-	return err
+	return errors.Join(err, <-watchErr)
 }
 
 func autoUpdate(ctx context.Context, h *home.Home, channel string, kick <-chan struct{}, log *slog.Logger) {
 	if version == "dev" || os.Getenv("HUBRIDGE_NO_AUTOUPDATE") == "1" {
 		return
 	}
-	u, err := update.New(h, version)
-	if err != nil {
-		log.Warn("auto-update is off", "err", err)
-		return
-	}
-	u.Watch(ctx, channel, 6*time.Hour, kick, log)
+	update.New(h, version).Watch(ctx, channel, 6*time.Hour, kick, log)
 }
 
 func updateCmd(args []string) error {
-	fs, homeFlag := flags("update")
-	to := fs.String("version", "", "bundled, latest or a release tag, saved as the channel")
-	fs.Parse(args)
-	h, err := openHome(*homeFlag)
+	var to string
+	h, err := parse("update", args, flag.ExitOnError, true, func(fs *flag.FlagSet) {
+		fs.StringVar(&to, "version", "", "bundled, latest or a release tag, saved as the channel")
+	})
 	if err != nil {
 		return err
 	}
@@ -341,15 +310,8 @@ func updateCmd(args []string) error {
 	if err != nil {
 		return err
 	}
-	channel := cfg.Channel
-	if *to != "" {
-		channel = *to
-	}
-	u, err := update.New(h, version)
-	if err != nil {
-		return err
-	}
-	res, err := u.Run(context.Background(), channel, true)
+	channel := cmp.Or(to, cfg.Channel)
+	res, err := update.New(h, version).Run(context.Background(), channel, true)
 	if err != nil {
 		return err
 	}
@@ -375,11 +337,9 @@ func updateCmd(args []string) error {
 }
 
 func printVersion(args []string) {
-	fs, homeFlag := flags("version")
-	fs.Parse(args)
 	out := strings.TrimSpace(version + " " + commit)
-	if dir, err := home.Resolve(*homeFlag); err == nil {
-		if cfg, err := (&home.Home{Dir: dir}).Config(); err == nil {
+	if h, err := parse("version", args, flag.ExitOnError, false, nil); err == nil {
+		if cfg, err := h.Config(); err == nil {
 			out += " (" + cfg.Channel + ")"
 		}
 	}
@@ -392,7 +352,7 @@ func probe(dir string) usage.Prober {
 		if err != nil {
 			return protocol.Reading{}, err
 		}
-		return usage.Probe(ctx, claude, dir, time.Now)
+		return usage.Probe(ctx, claude, dir)
 	}
 }
 
@@ -420,17 +380,13 @@ func rewrap(ctx context.Context, h *home.Home, log *slog.Logger) {
 }
 
 func doctorCmd(args []string) int {
-	fs, _ := flags("doctor")
-	projects := fs.String("projects", "", "Claude Code transcripts root (default ~/.claude/projects)")
-	days := fs.Int("days", 7, "how many days of transcripts to read")
-	fs.Parse(args)
-	if *projects == "" {
-		*projects = projectsDir()
-	}
-	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	rep := doctor.Run(context.Background(), doctor.Options{
-		Projects: *projects, Registry: registry.New(registryDir(*projects)), Days: *days, Now: time.Now, Log: log,
+	var projects string
+	var days int
+	_, _ = parse("doctor", args, flag.ExitOnError, false, func(fs *flag.FlagSet) {
+		fs.StringVar(&projects, "projects", projectsDir(), "Claude Code transcripts root")
+		fs.IntVar(&days, "days", 7, "how many days of transcripts to read")
 	})
+	rep := doctor.Run(context.Background(), projects, days)
 	rep.Write(os.Stdout)
 	switch rep.Worst() {
 	case doctor.Fail:
@@ -440,8 +396,6 @@ func doctorCmd(args []string) int {
 	}
 	return 0
 }
-
-func registryDir(projects string) string { return filepath.Join(filepath.Dir(projects), "sessions") }
 
 func projectsDir() string {
 	dir, _ := install.ClaudeDir()

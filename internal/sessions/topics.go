@@ -74,9 +74,6 @@ func (t *Tracker) claimTopics(path, slug string) []string {
 		return nil
 	}
 	topics := parseTopics(string(b))
-	if t.topics == nil {
-		t.topics = map[string]claimTopics{}
-	}
 	t.topics[path] = claimTopics{mod: st.ModTime(), topics: topics}
 	return topics
 }

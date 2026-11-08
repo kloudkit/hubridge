@@ -1,10 +1,8 @@
 package registry
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"maps"
 	"os"
@@ -28,19 +26,14 @@ const (
 	Background  = "background"
 )
 
-var ErrNoClaude = errors.New("claude not found on PATH")
-
 var statuses = map[string]string{"busy": Busy, "shell": Busy, "waiting": Waiting, "idle": Idle}
 
 type File struct {
 	PID        int    `json:"pid"`
 	SessionID  string `json:"sessionId"`
-	Cwd        string `json:"cwd"`
-	StartedAt  int64  `json:"startedAt"`
 	ProcStart  string `json:"procStart"`
 	Version    string `json:"version"`
 	Kind       string `json:"kind"`
-	Entrypoint string `json:"entrypoint"`
 	PIDDomain  string `json:"pidDomain"`
 	Name       string `json:"name"`
 	Status     string `json:"status"`
@@ -51,9 +44,7 @@ type File struct {
 type Agent struct {
 	ID         string `json:"id"`
 	PID        int    `json:"pid"`
-	Cwd        string `json:"cwd"`
 	Kind       string `json:"kind"`
-	StartedAt  int64  `json:"startedAt"`
 	SessionID  string `json:"sessionId"`
 	Name       string `json:"name"`
 	Status     string `json:"status"`
@@ -62,7 +53,6 @@ type Agent struct {
 }
 
 type Session struct {
-	SessionID  string
 	PID        int
 	Kind       string
 	Name       string
@@ -71,8 +61,6 @@ type Session struct {
 	JobID      string
 	JobState   string
 	Version    string
-	Entrypoint string
-	Cwd        string
 }
 
 func (s Session) Running() bool { return s.PID > 0 }
@@ -166,15 +154,12 @@ func (r *Registry) Alive(stem string, f File) bool {
 }
 
 func (r *Registry) Reconcile(ctx context.Context) error {
-	if r.Claude == "" {
-		return ErrNoClaude
-	}
 	out, err := r.List(ctx)
 	if err != nil {
 		return fmt.Errorf("claude agents --json: %w", err)
 	}
 	var list []Agent
-	if err := json.Unmarshal(bytes.TrimSpace(out), &list); err != nil {
+	if err := json.Unmarshal(out, &list); err != nil {
 		return fmt.Errorf("claude agents --json: %w", err)
 	}
 	r.Use(list)
@@ -199,15 +184,10 @@ func Normalize(raw string) (string, bool) {
 }
 
 func (r *Registry) status(id, raw string) string {
-	if raw == "" {
-		return r.last[id]
+	if s, ok := statuses[raw]; ok {
+		r.last[id] = s
 	}
-	s, ok := statuses[raw]
-	if !ok {
-		return r.last[id]
-	}
-	r.last[id] = s
-	return s
+	return r.last[id]
 }
 
 func (r *Registry) Sessions() map[string]Session {
@@ -225,9 +205,8 @@ func (r *Registry) Sessions() map[string]Session {
 			kind = Interactive
 		}
 		out[f.SessionID] = Session{
-			SessionID: f.SessionID, PID: f.PID, Kind: kind, Name: f.Name,
-			Status: r.status(f.SessionID, f.Status), WaitingFor: f.WaitingFor, JobID: f.JobID,
-			Version: f.Version, Entrypoint: f.Entrypoint, Cwd: f.Cwd,
+			PID: f.PID, Kind: kind, Name: f.Name, Status: r.status(f.SessionID, f.Status),
+			WaitingFor: f.WaitingFor, JobID: f.JobID, Version: f.Version,
 		}
 	}
 	if r.agentsAt.IsZero() || r.Now().Sub(r.agentsAt) > r.Fresh {
@@ -252,15 +231,12 @@ func (r *Registry) Sessions() map[string]Session {
 			if a.State != "" {
 				s.JobState = a.State
 			}
-			if listed, known := statuses[a.Status]; known && listed == Waiting && s.Status == Waiting && a.WaitingFor != "" {
+			if statuses[a.Status] == Waiting && s.Status == Waiting && a.WaitingFor != "" {
 				s.WaitingFor = a.WaitingFor
 			}
 			out[a.SessionID] = s
 		case a.Kind == Background && a.PID == 0:
-			out[a.SessionID] = Session{
-				SessionID: a.SessionID, Kind: Background, Name: a.Name, JobID: a.ID,
-				JobState: a.State, Cwd: a.Cwd,
-			}
+			out[a.SessionID] = Session{Kind: Background, Name: a.Name, JobID: a.ID, JobState: a.State}
 		}
 	}
 	return out

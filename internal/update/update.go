@@ -7,9 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"runtime"
@@ -26,6 +24,8 @@ import (
 const Releases = "https://github.com/kloudkit/hubridge/releases"
 
 var PublicKey = "4IZvi7v6NM3BdxKMI0n+hA/TTtQasT3rEZc7+y41VZ0="
+
+var key, _ = base64.StdEncoding.DecodeString(PublicKey)
 
 type Manifest struct {
 	Version  string            `json:"version"`
@@ -48,15 +48,11 @@ type Result struct {
 	Downgrade bool
 }
 
-func New(h *home.Home, current string) (*Updater, error) {
-	key, err := base64.StdEncoding.DecodeString(PublicKey)
-	if err != nil || len(key) != ed25519.PublicKeySize {
-		return nil, errors.New("this build has no release key")
-	}
+func New(h *home.Home, current string) *Updater {
 	return &Updater{
 		Home: h, Current: current, Key: key, Releases: Releases,
 		HTTP: &http.Client{Timeout: 5 * time.Minute}, OS: runtime.GOOS, Arch: runtime.GOARCH,
-	}, nil
+	}
 }
 
 func ValidChannel(c string) bool {
@@ -123,11 +119,11 @@ func (u *Updater) assetURL(hubd, channel, version string) string {
 
 func (u *Updater) manifest(ctx context.Context, url string) (Manifest, error) {
 	var m Manifest
-	body, err := u.get(ctx, url, 1<<20)
+	body, err := install.Get(ctx, u.HTTP, url, "", 1<<20)
 	if err != nil {
 		return m, err
 	}
-	sig, err := u.get(ctx, url+".sig", 1<<10)
+	sig, err := install.Get(ctx, u.HTTP, url+".sig", "", 1<<10)
 	if err != nil {
 		return m, err
 	}
@@ -149,42 +145,17 @@ func (u *Updater) hubdProtocol(ctx context.Context, hubd string) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, hubd+"/api/client/hello", nil)
+	body, err := install.Get(ctx, u.HTTP, hubd+"/api/client/hello", token, 1<<16)
 	if err != nil {
 		return 0, err
-	}
-	req.Header.Set("Authorization", "Bearer "+token)
-	resp, err := u.HTTP.Do(req)
-	if err != nil {
-		return 0, fmt.Errorf("reach hubd: %w", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return 0, fmt.Errorf("hubd hello: HTTP %d", resp.StatusCode)
 	}
 	var out struct {
 		Protocol int `json:"protocol"`
 	}
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<16)).Decode(&out); err != nil {
+	if err := json.Unmarshal(body, &out); err != nil {
 		return 0, fmt.Errorf("hubd hello: %w", err)
 	}
 	return out.Protocol, nil
-}
-
-func (u *Updater) get(ctx context.Context, url string, limit int64) ([]byte, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return nil, err
-	}
-	resp, err := u.HTTP.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("%s: HTTP %d", url, resp.StatusCode)
-	}
-	return io.ReadAll(io.LimitReader(resp.Body, limit))
 }
 
 func (u *Updater) install(ctx context.Context, url, want string) error {
@@ -192,7 +163,7 @@ func (u *Updater) install(ctx context.Context, url, want string) error {
 	if err != nil {
 		return fmt.Errorf("%s: the manifest has a malformed checksum", url)
 	}
-	body, err := u.get(ctx, url, 1<<28)
+	body, err := install.Get(ctx, u.HTTP, url, "", 1<<28)
 	if err != nil {
 		return err
 	}

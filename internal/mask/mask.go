@@ -15,7 +15,7 @@ var (
 	jwt    = regexp.MustCompile(`eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*`)
 	urlPw  = regexp.MustCompile(`([A-Za-z][A-Za-z0-9+.-]*://[^\s:/@]+:)[^\s@/]+@`)
 	prefix = regexp.MustCompile(`\b(?:ghp_|gho_|ghs_|github_pat_|glpat-|sk_live_|rk_live_|sk-|xox[abpr]-|hubd_)[A-Za-z0-9_-]{8,}|\b(?:AKIA|ASIA)[0-9A-Z]{16}\b|\bAIza[0-9A-Za-z_-]{20,}`)
-	scheme = regexp.MustCompile(`(?i)\b(?:bearer|basic)\s+[A-Za-z0-9._~+/=-]{8,}`)
+	scheme = regexp.MustCompile(`(?i)\b(bearer|basic)\s+[A-Za-z0-9._~+/=-]{8,}`)
 	flagKV = regexp.MustCompile(`(?i)(--` + secretKey + `)(\s+|=)("[^"]*"|'[^']*'|\S+)`)
 	kv     = regexp.MustCompile(`(?i)(["']?` + secretKey + `["']?)(\s*[:=]\s*)("[^"]*"|'[^']*'|[^\s,;&}]+)`)
 	run    = regexp.MustCompile(`[A-Za-z0-9+/_=-]{32,}`)
@@ -39,13 +39,11 @@ func apply(s string) string {
 	s = jwt.ReplaceAllString(s, Marker)
 	s = urlPw.ReplaceAllString(s, "${1}"+Marker+"@")
 	s = prefix.ReplaceAllString(s, Marker)
-	s = scheme.ReplaceAllStringFunc(s, func(m string) string {
-		return strings.Fields(m)[0] + " " + Marker
-	})
+	s = scheme.ReplaceAllString(s, "${1} "+Marker)
 	s = flagKV.ReplaceAllString(s, "${1}${2}"+Marker)
 	s = kv.ReplaceAllStringFunc(s, func(m string) string {
 		g := kv.FindStringSubmatch(m)
-		if g[3] == Marker || strings.HasPrefix(g[3], Marker) {
+		if strings.HasPrefix(g[3], Marker) {
 			return m
 		}
 		return g[1] + g[2] + Marker

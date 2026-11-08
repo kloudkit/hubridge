@@ -55,15 +55,13 @@ func TestSetupMergesIdempotentlyAndRemoves(t *testing.T) {
 		`"command": "echo start && date"`,
 		`"command": "guard.sh"`,
 		`"command": "\"/h/hubd/bin/hubridge\" hook session-start --home \"/h/hubd\""`,
-		`"matcher": "permission_prompt|elicitation_dialog|agent_needs_input|idle_prompt"`,
-		`"command": "\"/h/hubd/bin/hubridge\" hook notification --home \"/h/hubd\""`,
 		`"command": "\"/h/hubd/bin/hubridge\" hook stop --home \"/h/hubd\""`,
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("missing %s in\n%s", want, s)
 		}
 	}
-	if !(strings.Index(s, `"model"`) < strings.Index(s, `"hooks"`) && strings.Index(s, `"hooks"`) < strings.Index(s, `"permissions"`)) {
+	if strings.Index(s, `"model"`) >= strings.Index(s, `"hooks"`) || strings.Index(s, `"hooks"`) >= strings.Index(s, `"permissions"`) {
 		t.Errorf("key order changed:\n%s", s)
 	}
 	if strings.Index(s, "echo start") > strings.Index(s, "hook session-start") {

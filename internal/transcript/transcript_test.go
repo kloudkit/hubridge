@@ -13,7 +13,7 @@ import (
 
 func TestInterruptedTurnIsNotWorking(t *testing.T) {
 	f := NewFile(filepath.Join("..", "sessions", "testdata", "interrupted.jsonl"), true)
-	if _, err := f.Update(); err != nil {
+	if err := f.Update(); err != nil {
 		t.Fatal(err)
 	}
 	if f.Working {
@@ -98,7 +98,7 @@ func TestReadsLedgerLinksMarkersAndUsage(t *testing.T) {
 		t.Fatal(err)
 	}
 	f := NewFile(p, true)
-	if _, err := f.Update(); err != nil {
+	if err := f.Update(); err != nil {
 		t.Fatal(err)
 	}
 	if f.CustomTitle != "Port the parser" || f.Version != "2.1.318" || f.Branch != "main" || f.ContinuedIn != "62615bd4-fe2c-4dff-9251-86f538657ab1" {
@@ -131,7 +131,7 @@ func TestReadsLedgerLinksMarkersAndUsage(t *testing.T) {
 		t.Fatalf("ledger %+v", f.Ledger)
 	}
 	days, _, models := Aggregate([]*Msg{f.Msgs[key]}, time.Time{})
-	if want := []protocol.DayTokens{{Day: "2026-11-05", Input: 3, Output: 40, CacheRead: 1000, CacheWrite: 500}}; !reflect.DeepEqual(days, want) {
+	if want := []protocol.DayTokens{{Day: "2026-11-05", Tokens: protocol.Tokens{Input: 3, Output: 40, CacheRead: 1000, CacheWrite: 500}}}; !reflect.DeepEqual(days, want) {
 		t.Fatalf("days %+v", days)
 	}
 	if want := []protocol.ModelTokens{{Day: "2026-11-05", Model: "claude-opus-5-5", Speed: "fast", Input: 3, Output: 40, CacheRead: 1000, CacheWrite5m: 100, CacheWrite1h: 400, WebSearch: 2, WebFetch: 1}}; !reflect.DeepEqual(models, want) {

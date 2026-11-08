@@ -47,7 +47,9 @@ func (f *File) touch(name string, input json.RawMessage, cwd string, at time.Tim
 		Path     string `json:"path"`
 		Command  string `json:"command"`
 	}
-	json.Unmarshal(input, &in)
+	if json.Unmarshal(input, &in) != nil {
+		return
+	}
 	base := f.Folder
 	if base == "" {
 		base = cwd

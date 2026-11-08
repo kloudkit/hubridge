@@ -38,10 +38,6 @@ func TestStreamGivesTheRateLimitEvent(t *testing.T) {
 	if !ok || r.Source != "probe" || r.FiveHour != nil || r.SevenDay.Utilization != 0.05 || r.SevenDay.ResetsAt != "2026-11-08T06:00:00.000Z" {
 		t.Fatalf("reading %+v seven %+v", r, r.SevenDay)
 	}
-	old := `{"type":"rate_limit_event","rate_limit_info":{"rateLimitType":"five_hour","utilization":0.4,"resetsAt":1794117600}}`
-	if r, ok := FromStream(strings.NewReader(old), now); !ok || r.FiveHour.Utilization != 0.4 {
-		t.Fatalf("top-level window not read: %+v", r)
-	}
 	if _, ok := FromStream(strings.NewReader(`{"type":"result"}`), now); ok {
 		t.Fatal("no event gave a reading")
 	}
@@ -49,24 +45,28 @@ func TestStreamGivesTheRateLimitEvent(t *testing.T) {
 
 func TestSaveSkipsAnUnchangedRecentReading(t *testing.T) {
 	h, _ := home.Open(t.TempDir())
-	r := protocol.Reading{SevenDay: &protocol.Window{Utilization: 0.5, ResetsAt: "2026-11-08T09:20:00.000Z"}, Source: "statusline", At: protocol.Time(now)}
-	if changed, err := Save(h, r, now); err != nil || !changed {
-		t.Fatalf("first save %v %v", changed, err)
+	r := protocol.Reading{SevenDay: &protocol.Window{Utilization: 0.5, ResetsAt: "2026-11-08T09:20:00.000Z"}, Source: "statusline"}
+	save := func(after time.Duration) protocol.Reading {
+		t.Helper()
+		r.At = protocol.Time(now.Add(after))
+		if err := Save(h, r, now.Add(after)); err != nil {
+			t.Fatal(err)
+		}
+		got, _ := Load(h)
+		return got
 	}
-	r.At = protocol.Time(now.Add(10 * time.Second))
-	if changed, _ := Save(h, r, now.Add(10*time.Second)); changed {
+	if got := save(0); got.At != protocol.Time(now) {
+		t.Fatalf("first save %+v", got)
+	}
+	if got := save(10 * time.Second); got.At != protocol.Time(now) {
 		t.Fatal("an unchanged reading 10 s later was written again")
 	}
-	r.At = protocol.Time(now.Add(2 * time.Minute))
-	if changed, _ := Save(h, r, now.Add(2*time.Minute)); !changed {
+	if got := save(2 * time.Minute); got.At != r.At {
 		t.Fatal("a reading older than a minute was not refreshed")
 	}
 	r.SevenDay.Utilization = 0.6
-	if changed, _ := Save(h, r, now.Add(2*time.Minute+time.Second)); !changed {
-		t.Fatal("a changed reading was not written")
-	}
-	if got, ok := Load(h); !ok || got.SevenDay.Utilization != 0.6 {
-		t.Fatalf("loaded %+v", got)
+	if got := save(2*time.Minute + time.Second); got.SevenDay.Utilization != 0.6 {
+		t.Fatalf("a changed reading was not written: %+v", got)
 	}
 	if st, _ := os.Stat(h.Path(File)); st.Mode().Perm() != 0o600 {
 		t.Fatalf("usage.json is %o", st.Mode().Perm())
@@ -77,7 +77,7 @@ func TestProbeRunsClaudeAndReadsItsStream(t *testing.T) {
 	dir := t.TempDir()
 	fake := filepath.Join(dir, "claude")
 	os.WriteFile(fake, []byte("#!/bin/sh\necho \"$*\" > \"$(dirname \"$0\")/args\"\necho '"+event+"'\n"), 0o700)
-	r, err := Probe(context.Background(), fake, dir, func() time.Time { return now })
+	r, err := Probe(context.Background(), fake, dir)
 	if err != nil || r.SevenDay == nil {
 		t.Fatalf("probe %+v %v", r, err)
 	}
@@ -88,7 +88,7 @@ func TestProbeRunsClaudeAndReadsItsStream(t *testing.T) {
 		}
 	}
 	os.WriteFile(fake, []byte("#!/bin/sh\necho '{\"type\":\"result\"}'\n"), 0o700)
-	if _, err := Probe(context.Background(), fake, dir, func() time.Time { return now }); err != ErrNoReading {
+	if _, err := Probe(context.Background(), fake, dir); err != ErrNoReading {
 		t.Fatalf("no event gave %v", err)
 	}
 }
@@ -107,7 +107,7 @@ func TestWatchProbesOnlyWhileASessionIsLiveAndTheReadingIsStale(t *testing.T) {
 		mu.Unlock()
 		return protocol.Reading{SevenDay: &protocol.Window{Utilization: 0.1, ResetsAt: "2026-11-08T09:20:00.000Z"}, Source: "probe", At: protocol.Time(time.Now())}, nil
 	}
-	go Watch(t.Context(), h, send, isLive, probe, slog.New(slog.NewTextHandler(io.Discard, nil)), Intervals{Check: 5 * time.Millisecond, Probe: 5 * time.Millisecond, Stale: time.Hour}, time.Now)
+	go Watch(t.Context(), h, send, isLive, probe, slog.New(slog.NewTextHandler(io.Discard, nil)), Intervals{Check: 5 * time.Millisecond, Probe: 5 * time.Millisecond, Stale: time.Hour})
 	time.Sleep(40 * time.Millisecond)
 	mu.Lock()
 	if probes != 0 {

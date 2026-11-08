@@ -57,20 +57,10 @@ func FromStream(r io.Reader, now time.Time) (protocol.Reading, bool) {
 		if ev.Get("type").String() != "rate_limit_event" {
 			continue
 		}
-		info := ev.Get("rate_limit_info")
 		out := protocol.Reading{Source: "probe", At: protocol.Time(now)}
-		if w := info.Get("unifiedWindows"); w.IsObject() {
-			out.FiveHour = window(w.Get("five_hour"), "utilization", 1, "resetsAt")
-			out.SevenDay = window(w.Get("seven_day"), "utilization", 1, "resetsAt")
-		}
-		if out.FiveHour == nil && out.SevenDay == nil {
-			switch info.Get("rateLimitType").String() {
-			case "five_hour":
-				out.FiveHour = window(info, "utilization", 1, "resetsAt")
-			case "seven_day":
-				out.SevenDay = window(info, "utilization", 1, "resetsAt")
-			}
-		}
+		w := ev.Get("rate_limit_info.unifiedWindows")
+		out.FiveHour = window(w.Get("five_hour"), "utilization", 1, "resetsAt")
+		out.SevenDay = window(w.Get("seven_day"), "utilization", 1, "resetsAt")
 		if out.FiveHour != nil || out.SevenDay != nil {
 			return out, true
 		}
@@ -98,20 +88,20 @@ func Age(r protocol.Reading, now time.Time) time.Duration {
 	return now.Sub(at)
 }
 
-func Save(h *home.Home, r protocol.Reading, now time.Time) (bool, error) {
+func Save(h *home.Home, r protocol.Reading, now time.Time) error {
 	if old, ok := Load(h); ok && reflect.DeepEqual(old.FiveHour, r.FiveHour) && reflect.DeepEqual(old.SevenDay, r.SevenDay) && Age(old, now) < refresh {
-		return false, nil
+		return nil
 	}
 	b, err := json.Marshal(r)
 	if err != nil {
-		return false, err
+		return err
 	}
-	return true, home.WriteFile(h.Path(File), b)
+	return home.WriteFile(h.Path(File), b)
 }
 
 var ErrNoReading = errors.New("the probe printed no rate_limit_event")
 
-func Probe(ctx context.Context, claude, dir string, now func() time.Time) (protocol.Reading, error) {
+func Probe(ctx context.Context, claude, dir string) (protocol.Reading, error) {
 	ctx, cancel := context.WithTimeout(ctx, probeTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, claude, probeArgs...)
@@ -121,7 +111,7 @@ func Probe(ctx context.Context, claude, dir string, now func() time.Time) (proto
 	if err := cmd.Run(); err != nil {
 		return protocol.Reading{}, err
 	}
-	if r, ok := FromStream(&out, now()); ok {
+	if r, ok := FromStream(&out, time.Now()); ok {
 		return r, nil
 	}
 	return protocol.Reading{}, ErrNoReading

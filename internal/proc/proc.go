@@ -10,12 +10,7 @@ import (
 	"github.com/shirou/gopsutil/v4/process"
 )
 
-const startSlackMs = 1000
-
 func StatStart(pid int32) (string, bool) {
-	if pid <= 0 {
-		return "", false
-	}
 	b, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
 	if err != nil {
 		return "", false
@@ -46,55 +41,8 @@ func Domain() string {
 }
 
 func Running(pid int32) bool {
-	if pid <= 0 {
-		return false
-	}
 	ok, err := process.PidExists(pid)
 	return err == nil && ok
-}
-
-func StartTime(pid int32) (int64, bool) {
-	p, err := process.NewProcess(pid)
-	if err != nil {
-		return 0, false
-	}
-	ms, err := p.CreateTime()
-	return ms, err == nil
-}
-
-func Alive(pid int32, started int64) bool {
-	if !Running(pid) {
-		return false
-	}
-	ms, ok := StartTime(pid)
-	if !ok {
-		return false
-	}
-	if started < 100_000_000_000 {
-		started *= 1000
-	}
-	d := ms - started
-	return d >= -startSlackMs && d <= startSlackMs
-}
-
-type Info struct {
-	PPID  int32
-	Name  string
-	Argv0 string
-}
-
-func Lookup(pid int32) (Info, bool) {
-	p, err := process.NewProcess(pid)
-	if err != nil {
-		return Info{}, false
-	}
-	var i Info
-	i.PPID, _ = p.Ppid()
-	i.Name, _ = p.Name()
-	if args, err := p.CmdlineSlice(); err == nil && len(args) > 0 {
-		i.Argv0 = args[0]
-	}
-	return i, true
 }
 
 func Claude() (string, error) {

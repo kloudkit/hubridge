@@ -13,8 +13,8 @@ func TestDaemonMessagesMatchSchema(t *testing.T) {
 	end := "2026-11-04T10:00:00.000Z"
 	sum := protocol.Summary{
 		ID: "s1", Folder: "/w", Root: "/w", State: "ended", StartedAt: "2026-11-04T09:00:00.000Z", LastEventAt: end, EndedAt: &end,
-		Tokens: []protocol.DayTokens{{Day: "2026-11-04", Input: 1}}, TodoWrites: []string{},
-		Hours: []protocol.HourTokens{{Hour: "2026-11-04T13:00:00Z", Output: 2}},
+		Tokens: []protocol.DayTokens{{Day: "2026-11-04", Tokens: protocol.Tokens{Input: 1}}}, TodoWrites: []string{},
+		Hours: []protocol.HourTokens{{Hour: "2026-11-04T13:00:00Z", Tokens: protocol.Tokens{Output: 2}}},
 	}
 	withRemote := sum
 	withRemote.Remote = "git@github.com:kloudkit/ws-cli.git"

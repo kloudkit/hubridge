@@ -19,18 +19,16 @@ import (
 
 func withRegistry(t *testing.T, fx *fixture) *registry.Registry {
 	t.Helper()
-	dir := filepath.Join(filepath.Dir(fx.root), "sessions")
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	r := fx.tracker.Registry
+	if err := os.MkdirAll(r.Dir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	r := registry.New(dir)
-	r.Claude = "claude"
+	r.Claude = ""
 	r.Domain = ""
 	r.StatStart = func(pid int32) (string, bool) { return fmt.Sprint(pid * 10), true }
 	r.Running = func(int32) bool { return true }
 	now := time.Date(2026, 11, 5, 8, 30, 0, 0, time.UTC)
 	r.Now = func() time.Time { return now }
-	fx.tracker.Registry = r
 	return r
 }
 
@@ -52,7 +50,7 @@ func byID(list []protocol.Summary) map[string]protocol.Summary {
 
 func TestRegistryDecidesStates(t *testing.T) {
 	fx := setup(t)
-	r := withRegistry(t, fx)
+	r := fx.tracker.Registry
 	regFile(t, r, 1, idWaiting, "waiting")
 	regFile(t, r, 2, idWorking, "shell")
 	r.Run = func(context.Context, string, ...string) ([]byte, error) {
@@ -88,7 +86,7 @@ func TestRegistryDecidesStates(t *testing.T) {
 		t.Fatal(err)
 	}
 	out = &sink{}
-	fx.tracker.EmitAll(out)
+	fx.tracker.EmitLive(out)
 	got = byID(out.sessions)
 	if w := got[idWaiting]; w.State != "waiting" || w.Status != "idle" || w.WaitingFor != "" {
 		t.Fatalf("after the turn ended: %+v", w)
@@ -154,10 +152,7 @@ func forkFixture(t *testing.T) (*Tracker, string) {
 	writeLines(t, filepath.Join(dir, idCopy+".jsonl"),
 		reply("2026-11-05T09:00:00.000Z", "msg_1", "r1", 100, false),
 		reply("2026-11-05T09:10:00.000Z", "msg_3", "r3", 1, false))
-	tr := New(root, func() map[string]home.Handover {
-		return map[string]home.Handover{idOriginal: {PID: 1, Started: 1}, idCopy: {PID: 2, Started: 2}}
-	}, slog.New(slog.NewTextHandler(&strings.Builder{}, nil)))
-	tr.Alive = func(home.Handover) bool { return true }
+	tr := New(root, slog.New(slog.NewTextHandler(&strings.Builder{}, nil)))
 	tr.Now = func() time.Time { return time.Date(2026, 11, 5, 10, 0, 0, 0, time.UTC) }
 	return tr, dir
 }
@@ -205,7 +200,8 @@ func TestOwnershipMovesWhenTheOriginalIsReadLater(t *testing.T) {
 
 func TestWatchFollowsRegistryChanges(t *testing.T) {
 	fx := setup(t)
-	r := withRegistry(t, fx)
+	r := fx.tracker.Registry
+	r.Claude = "claude"
 	calls := make(chan struct{}, 10)
 	r.Run = func(context.Context, string, ...string) ([]byte, error) {
 		calls <- struct{}{}
@@ -246,7 +242,7 @@ func TestWatchFollowsRegistryChanges(t *testing.T) {
 
 func TestIdleWithBackgroundWorkIsWorking(t *testing.T) {
 	fx := setup(t)
-	r := withRegistry(t, fx)
+	r := fx.tracker.Registry
 	regFile(t, r, 1, idWaiting, "idle")
 	regFile(t, r, 2, idWorking, "idle")
 	bgs := map[string]home.Background{

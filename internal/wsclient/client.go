@@ -20,10 +20,8 @@ import (
 )
 
 const (
-	CloseRefused    websocket.StatusCode = 4000
-	CloseHelloFirst websocket.StatusCode = 4001
-	CloseNotJSON    websocket.StatusCode = 4002
-	CloseRevoked    websocket.StatusCode = 4003
+	CloseRefused websocket.StatusCode = 4000
+	CloseRevoked websocket.StatusCode = 4003
 )
 
 var (
@@ -136,10 +134,6 @@ func (c *Client) Run(ctx context.Context) error {
 	}
 }
 
-func (c *Client) wsURL() string {
-	return strings.TrimRight(c.URL, "/") + "/api/client/ws"
-}
-
 var errRotated = errors.New("token rotated")
 
 func (c *Client) connect(ctx context.Context) (bool, error) {
@@ -148,7 +142,7 @@ func (c *Client) connect(ctx context.Context) (bool, error) {
 		return false, err
 	}
 	dctx, cancel := context.WithTimeout(ctx, 15*time.Second)
-	conn, resp, err := websocket.Dial(dctx, c.wsURL(), &websocket.DialOptions{
+	conn, resp, err := websocket.Dial(dctx, c.URL+"/api/client/ws", &websocket.DialOptions{
 		HTTPHeader: http.Header{"Authorization": {"Bearer " + token}},
 	})
 	cancel()
@@ -186,9 +180,7 @@ func (c *Client) connect(ctx context.Context) (bool, error) {
 	for _, s := range sums {
 		c.Session(s)
 	}
-	c.mu.Lock()
-	c.live = &live
-	c.mu.Unlock()
+	c.Live(live)
 
 	sent := map[string]bool{}
 	var sentLive *protocol.Live
@@ -338,10 +330,6 @@ func closeErr(err error) error {
 	case CloseRevoked:
 		ce, _ := errors.AsType[websocket.CloseError](err)
 		return &RevokedError{Reason: ce.Reason}
-	case CloseHelloFirst:
-		return fmt.Errorf("hubd closed: hello was not first: %w", err)
-	case CloseNotJSON:
-		return fmt.Errorf("hubd closed: frame was not JSON: %w", err)
 	}
 	return err
 }

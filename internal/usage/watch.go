@@ -15,7 +15,7 @@ var DefaultIntervals = Intervals{Check: 30 * time.Second, Probe: 5 * time.Minute
 
 type Prober func(context.Context) (protocol.Reading, error)
 
-func Watch(ctx context.Context, h *home.Home, send func(protocol.Reading), live func() bool, probe Prober, log *slog.Logger, iv Intervals, now func() time.Time) {
+func Watch(ctx context.Context, h *home.Home, send func(protocol.Reading), live func() bool, probe Prober, log *slog.Logger, iv Intervals) {
 	last := ""
 	push := func() {
 		if r, ok := Load(h); ok && r.At != last {
@@ -38,7 +38,7 @@ func Watch(ctx context.Context, h *home.Home, send func(protocol.Reading), live 
 			if !live() {
 				continue
 			}
-			if r, ok := Load(h); ok && Age(r, now()) < iv.Stale {
+			if r, ok := Load(h); ok && Age(r, time.Now()) < iv.Stale {
 				continue
 			}
 			r, err := probe(ctx)
@@ -46,7 +46,7 @@ func Watch(ctx context.Context, h *home.Home, send func(protocol.Reading), live 
 				log.Warn("usage probe", "err", err)
 				continue
 			}
-			if _, err := Save(h, r, now()); err != nil {
+			if err := Save(h, r, time.Now()); err != nil {
 				log.Warn("save usage", "err", err)
 				continue
 			}

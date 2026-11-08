@@ -11,24 +11,14 @@ import (
 	"time"
 
 	"github.com/google/renameio/v2"
-
-	"github.com/kloudkit/hubridge/internal/proc"
 )
 
-type Home struct {
-	Dir       string
-	StartTime func(pid int32) (int64, bool)
-}
+type Home struct{ Dir string }
 
 type Config struct {
 	URL     string `json:"url"`
 	Machine string `json:"machine"`
 	Channel string `json:"channel"`
-}
-
-type Handover struct {
-	PID     int32 `json:"pid"`
-	Started int64 `json:"started"`
 }
 
 func Resolve(flag string) (string, error) {
@@ -46,31 +36,21 @@ func Resolve(flag string) (string, error) {
 }
 
 func Open(dir string) (*Home, error) {
-	h := &Home{Dir: dir, StartTime: proc.StartTime}
+	h := &Home{Dir: dir}
 	for _, d := range []string{dir, h.Path("sessions"), h.Path("queue")} {
 		if err := os.MkdirAll(d, 0o700); err != nil {
 			return nil, err
 		}
-		if err := os.Chmod(d, 0o700); err != nil {
-			return nil, err
-		}
 	}
-	for _, f := range []string{"token", "config.json"} {
-		if err := os.Chmod(h.Path(f), 0o600); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return nil, err
-		}
-	}
-	return h, nil
+	return h, os.Chmod(dir, 0o700)
 }
 
 func (h *Home) Path(parts ...string) string {
 	return filepath.Join(append([]string{h.Dir}, parts...)...)
 }
 
-func WriteFile(path string, data []byte) error { return WriteFileMode(path, data, 0o600) }
-
-func WriteFileMode(path string, data []byte, mode os.FileMode) error {
-	f, err := renameio.NewPendingFile(path, renameio.WithStaticPermissions(mode))
+func WriteFile(path string, data []byte) error {
+	f, err := renameio.NewPendingFile(path, renameio.WithStaticPermissions(0o600))
 	if err != nil {
 		return err
 	}
@@ -94,17 +74,7 @@ func (h *Home) Token() (string, error) {
 }
 
 func (h *Home) WriteToken(token string) error {
-	if err := WriteFile(h.Path("token"), []byte(token+"\n")); err != nil {
-		return err
-	}
-	got, err := h.Token()
-	if err != nil {
-		return err
-	}
-	if got != token {
-		return errors.New("token read back differs from the one written")
-	}
-	return nil
+	return WriteFile(h.Path("token"), []byte(token+"\n"))
 }
 
 func (h *Home) Config() (Config, error) {
@@ -123,28 +93,6 @@ func (h *Home) Config() (Config, error) {
 		return c, errors.New("config.json needs url and machine")
 	}
 	return c, nil
-}
-
-func (h *Home) Handovers() map[string]Handover {
-	type stored struct {
-		PID     int32  `json:"pid"`
-		Started *int64 `json:"started"`
-	}
-	out := map[string]Handover{}
-	for id, raw := range readSessions[stored](h, "") {
-		if raw.PID <= 0 {
-			continue
-		}
-		ho := Handover{PID: raw.PID}
-		if raw.Started != nil {
-			ho.Started = *raw.Started
-		} else if ms, ok := h.StartTime(raw.PID); ok {
-			ho.Started = ms
-			h.writeSession(id, "", ho)
-		}
-		out[id] = ho
-	}
-	return out
 }
 
 func readSessions[T any](h *Home, suffix string) map[string]T {
@@ -196,27 +144,6 @@ func (h *Home) WriteConfig(c Config) error {
 	return WriteFile(h.Path("config.json"), append(b, '\n'))
 }
 
-func (h *Home) WriteHandover(id string, pid int32) error {
-	return h.writeSession(id, "", map[string]int32{"pid": pid})
-}
-
-func (h *Home) MarkWaiting(id string, at time.Time) error {
-	return h.writeSession(id, ".waiting", map[string]string{"at": at.UTC().Format(time.RFC3339Nano)})
-}
-
-func (h *Home) Waiting() map[string]time.Time {
-	type stored struct {
-		At time.Time `json:"at"`
-	}
-	out := map[string]time.Time{}
-	for id, v := range readSessions[stored](h, ".waiting") {
-		if !v.At.IsZero() {
-			out[id] = v.At
-		}
-	}
-	return out
-}
-
 type Background struct {
 	At    time.Time      `json:"at"`
 	Tasks map[string]int `json:"tasks,omitempty"`
@@ -232,5 +159,3 @@ func (h *Home) Backgrounds() map[string]Background {
 }
 
 func (h *Home) ClearBackground(id string) { h.clearSession(id, ".background") }
-
-func (h *Home) ClearWaiting(id string) { h.clearSession(id, ".waiting") }

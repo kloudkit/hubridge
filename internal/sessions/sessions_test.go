@@ -12,7 +12,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kloudkit/hubridge/internal/home"
 	"github.com/kloudkit/hubridge/internal/protocol"
 )
 
@@ -65,10 +64,11 @@ func setup(t *testing.T) *fixture {
 	place(t, fx, "working.jsonl", "-repo/"+idWorking+".jsonl")
 	place(t, fx, "subagent.jsonl", "-repo/"+idWorking+"/subagents/agent-a1.jsonl")
 	place(t, fx, "interrupted.jsonl", "-nogit/"+idEnded+".jsonl")
-	hos := map[string]home.Handover{idWaiting: {PID: 1, Started: 1}, idWorking: {PID: 2, Started: 2}, idEnded: {PID: 3, Started: 3}}
-	fx.tracker = New(fx.root, func() map[string]home.Handover { return hos }, slog.New(slog.NewTextHandler(fx.log, nil)))
-	fx.tracker.Alive = func(h home.Handover) bool { return h.PID != 3 }
+	fx.tracker = New(fx.root, slog.New(slog.NewTextHandler(fx.log, nil)))
 	fx.tracker.Now = func() time.Time { return time.Date(2026, 11, 5, 8, 30, 0, 0, time.UTC) }
+	r := withRegistry(t, fx)
+	regFile(t, r, 1, idWaiting, "")
+	regFile(t, r, 2, idWorking, "")
 	return fx
 }
 
@@ -83,14 +83,15 @@ func TestSummariesFromFixtures(t *testing.T) {
 		{
 			ID: idWaiting, Folder: fx.repo + "/sub", Root: fx.repo, Title: "Latest title",
 			Excerpt: "Add a todo for the fixture and fix TOKEN=‹masked›", State: "waiting",
+			Kind: "interactive", Name: "n-11", Version: "2.1.318",
 			StartedAt: "2026-11-03T23:58:00.000Z", LastEventAt: "2026-11-04T00:01:05.000Z",
 			Tokens: []protocol.DayTokens{
-				{Day: "2026-11-03", Input: 10, Output: 20, CacheRead: 300, CacheWrite: 40},
-				{Day: "2026-11-04", Input: 1, Output: 2, CacheRead: 3, CacheWrite: 4},
+				{Day: "2026-11-03", Tokens: protocol.Tokens{Input: 10, Output: 20, CacheRead: 300, CacheWrite: 40}},
+				{Day: "2026-11-04", Tokens: protocol.Tokens{Input: 1, Output: 2, CacheRead: 3, CacheWrite: 4}},
 			},
 			Hours: []protocol.HourTokens{
-				{Hour: "2026-11-03T23:00:00Z", Input: 10, Output: 20, CacheRead: 300, CacheWrite: 40},
-				{Hour: "2026-11-04T00:00:00Z", Input: 1, Output: 2, CacheRead: 3, CacheWrite: 4},
+				{Hour: "2026-11-03T23:00:00Z", Tokens: protocol.Tokens{Input: 10, Output: 20, CacheRead: 300, CacheWrite: 40}},
+				{Hour: "2026-11-04T00:00:00Z", Tokens: protocol.Tokens{Input: 1, Output: 2, CacheRead: 3, CacheWrite: 4}},
 			},
 			TodoWrites: []string{"T1", "T2", "T5"},
 			Models: []protocol.ModelTokens{
@@ -101,16 +102,17 @@ func TestSummariesFromFixtures(t *testing.T) {
 		},
 		{
 			ID: idWorking, Folder: fx.repo, Root: fx.repo, Excerpt: "Second prompt, still running", State: "working",
+			Kind: "interactive", Name: "n-22", Version: "2.1.318",
 			StartedAt: "2026-11-04T08:00:00.000Z", LastEventAt: "2026-11-04T08:07:02.000Z",
-			Tokens:     []protocol.DayTokens{{Day: "2026-11-04", Input: 5, Output: 6, CacheRead: 7, CacheWrite: 8}},
-			Hours:      []protocol.HourTokens{{Hour: "2026-11-04T08:00:00Z", Input: 5, Output: 6, CacheRead: 7, CacheWrite: 8}},
+			Tokens:     []protocol.DayTokens{{Day: "2026-11-04", Tokens: protocol.Tokens{Input: 5, Output: 6, CacheRead: 7, CacheWrite: 8}}},
+			Hours:      []protocol.HourTokens{{Hour: "2026-11-04T08:00:00Z", Tokens: protocol.Tokens{Input: 5, Output: 6, CacheRead: 7, CacheWrite: 8}}},
 			TodoWrites: []string{"T9"},
 			Models:     []protocol.ModelTokens{{Day: "2026-11-04", Input: 5, Output: 6, CacheRead: 7, CacheWrite5m: 8}},
 		},
 		{
 			ID: idEnded, Folder: fx.nogit + "/gone", Root: fx.nogit + "/gone", State: "ended",
 			StartedAt: "2026-11-02T10:00:00.000Z", LastEventAt: "2026-11-02T10:00:05.000Z", EndedAt: ptr("2026-11-02T10:00:05.000Z"),
-			Tokens: []protocol.DayTokens{}, Hours: []protocol.HourTokens{}, TodoWrites: []string{},
+			Tokens: []protocol.DayTokens{}, TodoWrites: []string{},
 		},
 	}
 	if !reflect.DeepEqual(out.sessions, want) {
@@ -135,9 +137,11 @@ func TestSummariesFromFixtures(t *testing.T) {
 func TestEndedWhenProcessGoes(t *testing.T) {
 	fx := setup(t)
 	fx.tracker.Emit(&sink{}, fx.tracker.Scan())
-	fx.tracker.Alive = func(h home.Handover) bool { return h.PID == 1 }
+	if err := os.Remove(filepath.Join(fx.tracker.Registry.Dir, "2.json")); err != nil {
+		t.Fatal(err)
+	}
 	out := &sink{}
-	fx.tracker.EmitAll(out)
+	fx.tracker.EmitLive(out)
 	if len(out.sessions) != 1 || out.sessions[0].ID != idWorking || out.sessions[0].State != "ended" || *out.sessions[0].EndedAt != "2026-11-04T08:07:02.000Z" {
 		t.Fatalf("got %+v", out.sessions)
 	}
@@ -315,7 +319,7 @@ func TestHoursKeepOnlyTheLast48Hours(t *testing.T) {
 		if s.ID != idWaiting {
 			continue
 		}
-		want := []protocol.HourTokens{{Hour: "2026-11-04T00:00:00Z", Input: 1, Output: 2, CacheRead: 3, CacheWrite: 4}}
+		want := []protocol.HourTokens{{Hour: "2026-11-04T00:00:00Z", Tokens: protocol.Tokens{Input: 1, Output: 2, CacheRead: 3, CacheWrite: 4}}}
 		if !reflect.DeepEqual(s.Hours, want) {
 			t.Fatalf("hours %+v", s.Hours)
 		}
@@ -325,53 +329,4 @@ func TestHoursKeepOnlyTheLast48Hours(t *testing.T) {
 		return
 	}
 	t.Fatal("session not sent")
-}
-
-func TestWaitingFlagFromNotificationHook(t *testing.T) {
-	fx := setup(t)
-	flags := map[string]time.Time{}
-	var cleared []string
-	fx.tracker.Waiting = func() map[string]time.Time {
-		out := map[string]time.Time{}
-		for k, v := range flags {
-			out[k] = v
-		}
-		return out
-	}
-	fx.tracker.Clear = func(id string) { cleared = append(cleared, id); delete(flags, id) }
-	path := filepath.Join(fx.root, "-repo", idWorking+".jsonl")
-	appendLine := func(line string) string {
-		f, _ := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o600)
-		f.WriteString(line + "\n")
-		f.Close()
-		out := &sink{}
-		id, _ := fx.tracker.Touch(path)
-		fx.tracker.Emit(out, []string{id})
-		if len(out.sessions) != 1 {
-			t.Fatalf("after %s: %+v", line, out.sessions)
-		}
-		return out.sessions[0].State
-	}
-	fx.tracker.Emit(&sink{}, fx.tracker.Scan())
-
-	if st := appendLine(`{"type":"assistant","isSidechain":false,"timestamp":"2026-11-04T08:10:00.000Z","message":{"id":"msg_p","content":[{"type":"tool_use","id":"tu_p","name":"Bash","input":{"command":"rm -rf build"}}]}}`); st != "working" {
-		t.Fatalf("pending tool call: %s", st)
-	}
-	flags[idWorking] = time.Date(2026, 11, 4, 8, 10, 1, 0, time.UTC)
-	out := &sink{}
-	fx.tracker.EmitAll(out)
-	if len(out.sessions) != 1 || out.sessions[0].State != "waiting" {
-		t.Fatalf("permission prompt should show waiting: %+v", out.sessions)
-	}
-
-	if st := appendLine(`{"type":"user","isSidechain":false,"timestamp":"2026-11-04T08:10:30.000Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tu_p","content":"ok"}]}}`); st != "working" {
-		t.Fatalf("the answer should flip back to working at once, got %s", st)
-	}
-	if len(cleared) != 1 || cleared[0] != idWorking {
-		t.Fatalf("flag file not removed: %v", cleared)
-	}
-
-	if st := appendLine(`{"type":"system","subtype":"turn_duration","isSidechain":false,"timestamp":"2026-11-04T08:11:00.000Z"}`); st != "waiting" {
-		t.Fatalf("a finished turn should show waiting, got %s", st)
-	}
 }

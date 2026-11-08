@@ -17,8 +17,6 @@ import (
 
 	"github.com/tidwall/gjson"
 
-	"github.com/kloudkit/hubridge/internal/formats"
-	"github.com/kloudkit/hubridge/internal/home"
 	"github.com/kloudkit/hubridge/internal/registry"
 	"github.com/kloudkit/hubridge/internal/sessions"
 	"github.com/kloudkit/hubridge/internal/transcript"
@@ -61,25 +59,18 @@ func (r *Report) Write(w io.Writer) {
 	}
 }
 
-type Options struct {
-	Projects string
-	Registry *registry.Registry
-	Days     int
-	Now      func() time.Time
-	Log      *slog.Logger
-}
-
-func Run(ctx context.Context, o Options) *Report {
+func Run(ctx context.Context, projects string, days int) *Report {
 	r := &Report{}
-	r.add(Info, "pinned", "formats pinned against Claude Code %s", formats.SeenIn)
-	checkRegistry(r, o.Registry)
-	agents := checkAgents(ctx, r, o.Registry)
+	r.add(Info, "pinned", "formats pinned against Claude Code %s", SeenIn)
+	tr := sessions.New(projects, slog.New(slog.DiscardHandler))
+	checkRegistry(r, tr.Registry)
+	agents := checkAgents(ctx, r, tr.Registry)
 	start := time.Now()
-	checkTranscripts(r, o.Projects, o.Now().Add(-time.Duration(o.Days)*24*time.Hour), o.Days)
-	r.add(Info, "timing", "reading %d days of transcripts took %s", o.Days, time.Since(start).Round(100*time.Millisecond))
+	checkTranscripts(r, projects, start.Add(-time.Duration(days)*24*time.Hour), days)
+	r.add(Info, "timing", "reading %d days of transcripts took %s", days, time.Since(start).Round(100*time.Millisecond))
 	if agents != nil {
 		start = time.Now()
-		checkStates(r, o, agents)
+		checkStates(r, tr, agents)
 		r.add(Info, "timing", "the daemon's own start-up scan of 30 days took %s", time.Since(start).Round(100*time.Millisecond))
 	}
 	return r
@@ -101,12 +92,12 @@ func checkRegistry(r *Report, reg *registry.Registry) {
 		if err != nil {
 			continue
 		}
-		for _, field := range formats.RegistryFields {
+		for _, field := range RegistryFields {
 			if !gjson.GetBytes(raw, field).Exists() {
 				r.add(Drift, "registry", "%s.json has no %q", stem, field)
 			}
 		}
-		if f.Status != "" && !formats.RegistryStatuses[f.Status] {
+		if _, ok := registry.Normalize(f.Status); f.Status != "" && !ok {
 			r.add(Drift, "registry", "%s.json has status %q, not in the pinned list", stem, f.Status)
 		}
 	}
@@ -119,7 +110,7 @@ func checkRegistry(r *Report, reg *registry.Registry) {
 	r.add(OK, "registry", "%d files, %d of them live, %d left by sessions that ended or crashed", len(files), live, len(files)-live)
 }
 
-func checkAgents(ctx context.Context, r *Report, reg *registry.Registry) []map[string]any {
+func checkAgents(ctx context.Context, r *Report, reg *registry.Registry) []registry.Agent {
 	if reg.Claude == "" {
 		r.add(Drift, "agents", "claude is not on PATH: no waiting reasons and no background sessions")
 		return nil
@@ -131,31 +122,29 @@ func checkAgents(ctx context.Context, r *Report, reg *registry.Registry) []map[s
 		return nil
 	}
 	took := time.Since(start)
-	var list []map[string]any
+	var list []registry.Agent
 	if err := json.Unmarshal(raw, &list); err != nil {
 		r.add(Fail, "agents", "claude agents --json --all is not a JSON array: %v", err)
 		return nil
 	}
-	var typed []registry.Agent
-	json.Unmarshal(raw, &typed)
-	reg.Use(typed)
+	reg.Use(list)
+	entries := gjson.ParseBytes(raw).Array()
 	kinds := map[string]int{}
 	for i, a := range list {
-		for _, field := range formats.AgentFields {
-			if _, ok := a[field]; !ok {
+		for _, field := range AgentFields {
+			if !entries[i].Get(field).Exists() {
 				r.add(Drift, "agents", "entry %d has no %q", i, field)
 			}
 		}
-		kind, _ := a["kind"].(string)
-		kinds[kind]++
-		if s, ok := a["status"].(string); ok && !formats.AgentStatuses[s] {
-			r.add(Drift, "agents", "status %q is not in the pinned list", s)
+		kinds[a.Kind]++
+		if _, ok := registry.Normalize(a.Status); a.Status != "" && !ok {
+			r.add(Drift, "agents", "status %q is not in the pinned list", a.Status)
 		}
-		if s, ok := a["state"].(string); ok && !formats.JobStates[s] {
-			r.add(Drift, "agents", "background state %q is not in the pinned list", s)
+		if a.State != "" && !JobStates[a.State] {
+			r.add(Drift, "agents", "background state %q is not in the pinned list", a.State)
 		}
-		if s, ok := a["waitingFor"].(string); ok && !formats.WaitingFor[s] {
-			r.add(Drift, "agents", "waitingFor %q is not in the pinned list", s)
+		if a.WaitingFor != "" && !WaitingFor[a.WaitingFor] {
+			r.add(Drift, "agents", "waitingFor %q is not in the pinned list", a.WaitingFor)
 		}
 	}
 	r.add(OK, "agents", "claude agents --json --all lists %d interactive and %d background sessions, in %s", kinds[registry.Interactive], kinds[registry.Background], took.Round(10*time.Millisecond))
@@ -202,14 +191,14 @@ func checkTranscripts(r *Report, projects string, since time.Time, days int) {
 					break
 				}
 				usageLines++
-				for _, f := range formats.UsageFields {
+				for _, f := range UsageFields {
 					if u.Get(f).Exists() {
 						usage[f]++
 					}
 				}
 			case "cost-state":
 				ledgerLines++
-				for _, f := range formats.LedgerFields {
+				for _, f := range LedgerFields {
 					if gjson.GetBytes(line, f).Exists() {
 						ledger[f]++
 					}
@@ -218,47 +207,40 @@ func checkTranscripts(r *Report, projects string, since time.Time, days int) {
 		}
 		return nil
 	})
-	for _, t := range slices.Sorted(maps.Keys(types)) {
-		if !formats.EntryTypes[t] {
-			r.add(Drift, "transcripts", "entry type %q appears %d times and is not in the pinned list", t, types[t])
-		}
-	}
-	for _, s := range slices.Sorted(maps.Keys(subtypes)) {
-		if !formats.SystemSubtypes[s] {
-			r.add(Drift, "transcripts", "system subtype %q appears %d times and is not in the pinned list", s, subtypes[s])
-		}
-	}
+	r.unpinned("entry type", types, EntryTypes)
+	r.unpinned("system subtype", subtypes, SystemSubtypes)
 	for _, t := range slices.Sorted(maps.Keys(transcript.ReadTypes)) {
 		if types[t] == 0 {
 			r.add(Info, "transcripts", "no %q entry in the last %d days", t, days)
 		}
 	}
-	if usageLines > 0 {
-		for _, f := range formats.UsageFields {
-			if usage[f] == 0 {
-				r.add(Drift, "transcripts", "no reply's usage carries %s", f)
-			}
-		}
-	}
-	if ledgerLines > 0 {
-		for _, f := range formats.LedgerFields {
-			if ledger[f] == 0 {
-				r.add(Drift, "transcripts", "no cost-state line carries %s", f)
-			}
-		}
-	}
+	r.unseen("reply's usage", usageLines, usage, UsageFields)
+	r.unseen("cost-state line", ledgerLines, ledger, LedgerFields)
 	if broken > 0 {
 		r.add(Info, "transcripts", "%d lines are not JSON, usually a line still being written", broken)
 	}
 	r.add(OK, "transcripts", "%d files and %d lines from the last %d days read; %d replies with usage, %d cost-state lines", files, lines, days, usageLines, ledgerLines)
 }
 
+func (r *Report) unpinned(what string, seen map[string]int, pinned map[string]bool) {
+	for _, k := range slices.Sorted(maps.Keys(seen)) {
+		if !pinned[k] {
+			r.add(Drift, "transcripts", "%s %q appears %d times and is not in the pinned list", what, k, seen[k])
+		}
+	}
+}
+
+func (r *Report) unseen(what string, lines int, seen map[string]int, fields []string) {
+	for _, f := range fields {
+		if lines > 0 && seen[f] == 0 {
+			r.add(Drift, "transcripts", "no %s carries %s", what, f)
+		}
+	}
+}
+
 var wantState = map[string]string{"busy": "working", "waiting": "waiting", "idle": "waiting"}
 
-func checkStates(r *Report, o Options, agents []map[string]any) {
-	tr := sessions.New(o.Projects, func() map[string]home.Handover { return nil }, o.Log)
-	tr.Registry = o.Registry
-	tr.Now = o.Now
+func checkStates(r *Report, tr *sessions.Tracker, agents []registry.Agent) {
 	tr.Scan()
 	sums, _ := tr.Snapshot()
 	by := map[string]string{}
@@ -268,9 +250,8 @@ func checkStates(r *Report, o Options, agents []map[string]any) {
 	}
 	matched, missing := 0, 0
 	for _, a := range agents {
-		id, _ := a["sessionId"].(string)
-		st, _ := a["status"].(string)
-		if _, running := a["pid"]; !running || id == "" || st == "" {
+		id, st := a.SessionID, a.Status
+		if a.PID == 0 || id == "" || st == "" {
 			continue
 		}
 		state, ok := by[id]

@@ -62,9 +62,8 @@ func TestOriginOfAWorktreeComesFromTheMainRepo(t *testing.T) {
 func TestSummaryCarriesRootAndRemote(t *testing.T) {
 	fx := setup(t)
 	initRepo(t, fx.repo, "https://github.com/kloudkit/hubridge")
-	fx.tracker.Scan()
 	var out sink
-	fx.tracker.EmitAll(&out)
+	fx.tracker.Emit(&out, fx.tracker.Scan())
 	found := false
 	for _, s := range out.sessions {
 		if s.ID == idWorking {

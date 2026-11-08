@@ -61,7 +61,6 @@ type File struct {
 	Version     string
 	LastPrompt  string
 	Working     bool
-	UserAt      time.Time
 	First       time.Time
 	Last        time.Time
 	Headless    bool
@@ -77,7 +76,6 @@ type File struct {
 	Errors      []string
 
 	fresh     []string
-	todoSet   map[string]bool
 	pending   map[string]string
 	model     string
 	requested string
@@ -94,7 +92,6 @@ func (f *File) reset() {
 	f.Edits = map[string]*Edit{}
 	f.Touches = map[string]*Edit{}
 	f.Msgs = map[string]*Msg{}
-	f.todoSet = map[string]bool{}
 	f.pending = map[string]string{}
 }
 
@@ -202,38 +199,36 @@ type block struct {
 	IsError   bool            `json:"is_error"`
 }
 
-func (f *File) Update() (bool, error) {
+func (f *File) Update() error {
 	fh, err := os.Open(f.Path)
 	if err != nil {
-		return false, err
+		return err
 	}
 	defer fh.Close()
 	st, err := fh.Stat()
 	if err != nil {
-		return false, err
+		return err
 	}
 	if st.Size() < f.Offset {
 		f.reset()
 	}
 	if st.Size() == f.Offset {
-		return false, nil
+		return nil
 	}
 	if _, err := fh.Seek(f.Offset, io.SeekStart); err != nil {
-		return false, err
+		return err
 	}
 	r := bufio.NewReaderSize(fh, 64*1024)
-	changed := false
 	for {
 		line, err := r.ReadBytes('\n')
 		if err == io.EOF {
-			return changed, nil
+			return nil
 		}
 		if err != nil {
-			return changed, err
+			return err
 		}
 		f.Offset += int64(len(line))
 		f.Line++
-		changed = true
 		f.consume(bytes.TrimSpace(line))
 	}
 }
@@ -325,7 +320,7 @@ func (f *File) consume(line []byte) {
 		}
 	case "user":
 		if e.Message != nil {
-			f.user(e.Message.Content, main, at)
+			f.user(e.Message.Content, main)
 		}
 	case "assistant":
 		if e.Message != nil {
@@ -396,10 +391,7 @@ func blocks(raw json.RawMessage) ([]block, string, bool) {
 	return bs, "", err == nil
 }
 
-func (f *File) user(content json.RawMessage, main bool, at time.Time) {
-	if main && at.After(f.UserAt) {
-		f.UserAt = at
-	}
+func (f *File) user(content json.RawMessage, main bool) {
 	bs, text, ok := blocks(content)
 	if !ok {
 		f.fail(errors.New("user content is neither text nor blocks"))
@@ -461,11 +453,7 @@ func (f *File) assistant(e entry, main bool, at time.Time) {
 			f.touch(b.Name, b.Input, e.Cwd, at)
 		}
 		if IsTodoWrite(b.Name) && b.ID != "" {
-			var in struct {
-				ID string `json:"id"`
-			}
-			json.Unmarshal(b.Input, &in)
-			f.pending[b.ID] = in.ID
+			f.pending[b.ID] = gjson.GetBytes(b.Input, "id").String()
 		}
 	}
 }
@@ -475,7 +463,9 @@ func (f *File) edit(input json.RawMessage, at time.Time) {
 		FilePath     string `json:"file_path"`
 		NotebookPath string `json:"notebook_path"`
 	}
-	json.Unmarshal(input, &in)
+	if json.Unmarshal(input, &in) != nil {
+		return
+	}
 	p := in.FilePath
 	if p == "" {
 		p = in.NotebookPath
@@ -496,8 +486,7 @@ func (f *File) toolResult(b block) {
 	if id == "" {
 		id = resultID(b.Content)
 	}
-	if id != "" && !f.todoSet[id] {
-		f.todoSet[id] = true
+	if id != "" && !slices.Contains(f.Todos, id) {
 		f.Todos = append(f.Todos, id)
 	}
 }
@@ -535,39 +524,20 @@ func IsTodoWrite(name string) bool {
 }
 
 func Aggregate(msgs []*Msg, since time.Time) ([]protocol.DayTokens, []protocol.HourTokens, []protocol.ModelTokens) {
-	days := map[string]*protocol.DayTokens{}
-	hours := map[string]*protocol.HourTokens{}
-	models := map[[3]string]*protocol.ModelTokens{}
+	days := map[string]protocol.DayTokens{}
+	hours := map[string]protocol.HourTokens{}
+	models := map[[3]string]protocol.ModelTokens{}
 	for _, m := range msgs {
 		day := m.At.Format("2006-01-02")
-		write := m.Write5m + m.Write1h
-		d := days[day]
-		if d == nil {
-			d = &protocol.DayTokens{Day: day}
-			days[day] = d
-		}
-		d.Input += m.Input
-		d.Output += m.Output
-		d.CacheRead += m.CacheRead
-		d.CacheWrite += write
+		t := protocol.Tokens{Input: m.Input, Output: m.Output, CacheRead: m.CacheRead, CacheWrite: m.Write5m + m.Write1h}
+		days[day] = protocol.DayTokens{Day: day, Tokens: days[day].Plus(t)}
 		if hourStart := m.At.Truncate(time.Hour); hourStart.Add(time.Hour).After(since) {
 			hour := hourStart.Format(hourFormat)
-			h := hours[hour]
-			if h == nil {
-				h = &protocol.HourTokens{Hour: hour}
-				hours[hour] = h
-			}
-			h.Input += m.Input
-			h.Output += m.Output
-			h.CacheRead += m.CacheRead
-			h.CacheWrite += write
+			hours[hour] = protocol.HourTokens{Hour: hour, Tokens: hours[hour].Plus(t)}
 		}
 		k := [3]string{day, m.Model, m.Speed}
 		mt := models[k]
-		if mt == nil {
-			mt = &protocol.ModelTokens{Day: day, Model: m.Model, Speed: m.Speed}
-			models[k] = mt
-		}
+		mt.Day, mt.Model, mt.Speed = day, m.Model, m.Speed
 		mt.Input += m.Input
 		mt.Output += m.Output
 		mt.CacheRead += m.CacheRead
@@ -575,21 +545,13 @@ func Aggregate(msgs []*Msg, since time.Time) ([]protocol.DayTokens, []protocol.H
 		mt.CacheWrite1h += m.Write1h
 		mt.WebSearch += m.WebSearch
 		mt.WebFetch += m.WebFetch
+		models[k] = mt
 	}
-	dayList := sortedValues(days, func(a, b protocol.DayTokens) int { return strings.Compare(a.Day, b.Day) })
-	hourList := slices.DeleteFunc(sortedValues(hours, func(a, b protocol.HourTokens) int { return strings.Compare(a.Hour, b.Hour) }),
-		func(h protocol.HourTokens) bool { return h.Input+h.Output+h.CacheRead+h.CacheWrite == 0 })
-	modelList := sortedValues(models, func(a, b protocol.ModelTokens) int {
+	dayList := slices.SortedFunc(maps.Values(days), func(a, b protocol.DayTokens) int { return strings.Compare(a.Day, b.Day) })
+	hourList := slices.DeleteFunc(slices.SortedFunc(maps.Values(hours), func(a, b protocol.HourTokens) int { return strings.Compare(a.Hour, b.Hour) }),
+		func(h protocol.HourTokens) bool { return h.Tokens == protocol.Tokens{} })
+	modelList := slices.SortedFunc(maps.Values(models), func(a, b protocol.ModelTokens) int {
 		return cmp.Or(strings.Compare(a.Day, b.Day), strings.Compare(a.Model, b.Model), strings.Compare(a.Speed, b.Speed))
 	})
 	return dayList, hourList, modelList
-}
-
-func sortedValues[K comparable, V any](m map[K]*V, compare func(a, b V) int) []V {
-	out := make([]V, 0, len(m))
-	for _, v := range m {
-		out = append(out, *v)
-	}
-	slices.SortFunc(out, compare)
-	return out
 }

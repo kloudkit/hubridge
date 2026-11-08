@@ -36,7 +36,7 @@ func statusLineOf(raw []byte) (gjson.Result, string, bool) {
 
 func WrapStatusLine(settingsPath, homeDir string) (bool, error) {
 	saved := filepath.Join(homeDir, StatusLineFile)
-	path, raw, mode, err := readSettings(settingsPath)
+	path, raw, err := readSettings(settingsPath)
 	if errors.Is(err, os.ErrNotExist) {
 		return false, nil
 	}
@@ -58,13 +58,13 @@ func WrapStatusLine(settingsPath, homeDir string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	return true, writeSettings(path, out, mode)
+	return true, writeSettings(path, out)
 }
 
 func UnwrapStatusLine(settingsPath, homeDir string) error {
 	saved := filepath.Join(homeDir, StatusLineFile)
 	defer os.Remove(saved)
-	path, raw, mode, err := readSettings(settingsPath)
+	path, raw, err := readSettings(settingsPath)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
@@ -83,7 +83,7 @@ func UnwrapStatusLine(settingsPath, homeDir string) error {
 	} else if out, err = sjson.DeleteBytes(raw, "statusLine"); err != nil {
 		return err
 	}
-	return writeSettings(path, out, mode)
+	return writeSettings(path, out)
 }
 
 func originalStatusLine(h *home.Home) string {
@@ -101,7 +101,7 @@ func originalStatusLine(h *home.Home) string {
 func RunStatusLine(ctx context.Context, h *home.Home, stdin io.Reader, stdout, stderr io.Writer, now time.Time) int {
 	raw, _ := io.ReadAll(io.LimitReader(stdin, 1<<20))
 	if r, ok := usage.FromStatusLine(raw, now); ok {
-		if _, err := usage.Save(h, r, now); err != nil {
+		if err := usage.Save(h, r, now); err != nil {
 			fmt.Fprintln(stderr, "hubd statusline:", err)
 		}
 	}

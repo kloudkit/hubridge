@@ -14,20 +14,25 @@ const (
 
 func Time(t time.Time) string { return t.UTC().Format(timeFormat) }
 
+type Tokens struct {
+	Input      int64 `json:"input"`
+	Output     int64 `json:"output"`
+	CacheRead  int64 `json:"cacheRead"`
+	CacheWrite int64 `json:"cacheWrite"`
+}
+
+func (t Tokens) Plus(o Tokens) Tokens {
+	return Tokens{t.Input + o.Input, t.Output + o.Output, t.CacheRead + o.CacheRead, t.CacheWrite + o.CacheWrite}
+}
+
 type DayTokens struct {
-	Day        string `json:"day"`
-	Input      int64  `json:"input"`
-	Output     int64  `json:"output"`
-	CacheRead  int64  `json:"cacheRead"`
-	CacheWrite int64  `json:"cacheWrite"`
+	Day string `json:"day"`
+	Tokens
 }
 
 type HourTokens struct {
-	Hour       string `json:"hour"`
-	Input      int64  `json:"input"`
-	Output     int64  `json:"output"`
-	CacheRead  int64  `json:"cacheRead"`
-	CacheWrite int64  `json:"cacheWrite"`
+	Hour string `json:"hour"`
+	Tokens
 }
 
 type ModelTokens struct {

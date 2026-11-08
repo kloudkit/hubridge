@@ -3,7 +3,6 @@ package registry
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -49,7 +48,7 @@ func ids(m map[string]Session) []string {
 
 func TestSessionsKeepsOnlyVerifiedProcesses(t *testing.T) {
 	r, _ := fixture(t)
-	write(t, r.Dir, "100", File{PID: 100, SessionID: "a", ProcStart: "5000", PIDDomain: r.Domain, Status: "busy", Kind: "interactive", Name: "ws-a1", Version: "2.1.318", Entrypoint: "cli", Cwd: "/w"})
+	write(t, r.Dir, "100", File{PID: 100, SessionID: "a", ProcStart: "5000", PIDDomain: r.Domain, Status: "busy", Kind: "interactive", Name: "ws-a1", Version: "2.1.318"})
 	write(t, r.Dir, "200", File{PID: 200, SessionID: "b", ProcStart: "6000", PIDDomain: r.Domain, Status: "shell"})
 	write(t, r.Dir, "300", File{PID: 300, SessionID: "reused", ProcStart: "1234", PIDDomain: r.Domain, Status: "idle"})
 	write(t, r.Dir, "400", File{PID: 400, SessionID: "gone", ProcStart: "1", Status: "idle"})
@@ -63,7 +62,7 @@ func TestSessionsKeepsOnlyVerifiedProcesses(t *testing.T) {
 	if want := []string{"a", "b"}; !reflect.DeepEqual(ids(got), want) {
 		t.Fatalf("live = %v, want %v", ids(got), want)
 	}
-	if want := (Session{SessionID: "a", PID: 100, Kind: "interactive", Name: "ws-a1", Status: Busy, Version: "2.1.318", Entrypoint: "cli", Cwd: "/w"}); got["a"] != want {
+	if want := (Session{PID: 100, Kind: "interactive", Name: "ws-a1", Status: Busy, Version: "2.1.318"}); got["a"] != want {
 		t.Fatalf("a = %+v, want %+v", got["a"], want)
 	}
 	if got["b"].Status != Busy || got["b"].Kind != Interactive {
@@ -132,14 +131,6 @@ func TestStaleListingIsIgnored(t *testing.T) {
 	got := r.Sessions()
 	if want := []string{"a"}; !reflect.DeepEqual(ids(got), want) || got["a"].WaitingFor != "" {
 		t.Fatalf("with a stale listing: %+v, want only a, with no reason", got)
-	}
-}
-
-func TestReconcileNeedsClaude(t *testing.T) {
-	r, _ := fixture(t)
-	r.Claude = ""
-	if err := r.Reconcile(context.Background()); !errors.Is(err, ErrNoClaude) {
-		t.Fatalf("err = %v, want ErrNoClaude", err)
 	}
 }
 

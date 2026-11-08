@@ -1,7 +1,6 @@
 package install
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"log/slog"
@@ -9,7 +8,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
-	"strings"
 	"syscall"
 	"time"
 
@@ -139,7 +137,7 @@ func (s *Supervisor) await(ctx context.Context, cmd *exec.Cmd, started os.FileIn
 }
 
 func (s *Supervisor) awaitToken(ctx context.Context) bool {
-	before, _ := os.ReadFile(s.Home.Path("token"))
+	before, _ := s.Home.Token()
 	s.Log.Error("daemon stopped: its token was revoked or the machine removed; waiting for a new token (rerun the installer)")
 	t := time.NewTicker(s.TokenPoll)
 	defer t.Stop()
@@ -148,8 +146,7 @@ func (s *Supervisor) awaitToken(ctx context.Context) bool {
 		case <-ctx.Done():
 			return false
 		case <-t.C:
-			now, err := os.ReadFile(s.Home.Path("token"))
-			if err == nil && len(bytes.TrimSpace(now)) > 0 && !bytes.Equal(now, before) {
+			if now, err := s.Home.Token(); err == nil && now != before {
 				s.Log.Info("token changed; restarting the daemon")
 				return true
 			}
@@ -195,13 +192,8 @@ func Detach(h *home.Home, self string) error {
 	cmd := exec.Command(installed(h.Dir, self), "supervise", "--home", h.Dir)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = devnull, logf, logf
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
-	cmd.Env = withoutToken(os.Environ())
 	if err := cmd.Start(); err != nil {
 		return err
 	}
 	return cmd.Process.Release()
-}
-
-func withoutToken(env []string) []string {
-	return slices.DeleteFunc(slices.Clone(env), func(e string) bool { return strings.HasPrefix(e, "HUBD_TOKEN=") })
 }

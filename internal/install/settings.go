@@ -9,15 +9,14 @@ import (
 	"path/filepath"
 	"regexp"
 
+	"github.com/google/renameio/v2"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
-
-	"github.com/kloudkit/hubridge/internal/home"
 )
 
-const notificationMatcher = "permission_prompt|elicitation_dialog|agent_needs_input|idle_prompt"
+var ours = regexp.MustCompile(`hubridge"? hook (session-start|stop)\b`)
 
-var ours = regexp.MustCompile(`hubridge"? hook (session-start|notification|stop)\b`)
+var hooks = []struct{ event, arg string }{{"SessionStart", "session-start"}, {"Stop", "stop"}}
 
 func ClaudeDir() (string, error) {
 	if dir := os.Getenv("CLAUDE_CONFIG_DIR"); dir != "" {
@@ -43,44 +42,40 @@ func selfCommand(homeDir, args string) string {
 
 func hookCommand(homeDir, event string) string { return selfCommand(homeDir, "hook "+event) }
 
-func readSettings(path string) (string, []byte, os.FileMode, error) {
+func readSettings(path string) (string, []byte, error) {
 	if real, err := filepath.EvalSymlinks(path); err == nil {
 		path = real
 	}
 	raw, err := os.ReadFile(path)
 	if err != nil {
-		return path, nil, 0, err
-	}
-	mode := os.FileMode(0o600)
-	if st, err := os.Stat(path); err == nil {
-		mode = st.Mode().Perm()
+		return path, nil, err
 	}
 	if len(bytes.TrimSpace(raw)) == 0 {
 		raw = []byte("{}")
 	}
 	if !gjson.ValidBytes(raw) {
-		return path, nil, 0, errors.New("not valid JSON")
+		return path, nil, errors.New("not valid JSON")
 	}
-	return path, raw, mode, nil
+	return path, raw, nil
 }
 
-func writeSettings(path string, raw []byte, mode os.FileMode) error {
+func writeSettings(path string, raw []byte) error {
 	var out bytes.Buffer
 	if err := json.Indent(&out, bytes.TrimSpace(raw), "", "  "); err != nil {
 		return err
 	}
 	out.WriteByte('\n')
-	return home.WriteFileMode(path, out.Bytes(), mode)
+	return renameio.WriteFile(path, out.Bytes(), 0o600)
 }
 
 func Setup(path, homeDir string, remove bool) error {
-	path, raw, mode, err := readSettings(path)
+	path, raw, err := readSettings(path)
 	switch {
 	case errors.Is(err, os.ErrNotExist):
 		if remove {
 			return nil
 		}
-		raw, mode = []byte("{}"), 0o600
+		raw = []byte("{}")
 		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 			return err
 		}
@@ -89,7 +84,7 @@ func Setup(path, homeDir string, remove bool) error {
 	default:
 		bak := path + ".hubd-bak"
 		if _, err := os.Stat(bak); errors.Is(err, os.ErrNotExist) {
-			if err := home.WriteFileMode(bak, raw, mode); err != nil {
+			if err := renameio.WriteFile(bak, raw, 0o600); err != nil {
 				return fmt.Errorf("back up settings: %w", err)
 			}
 		}
@@ -98,29 +93,23 @@ func Setup(path, homeDir string, remove bool) error {
 	if err != nil {
 		return fmt.Errorf("%s: %w", path, err)
 	}
-	return writeSettings(path, out, mode)
+	return writeSettings(path, out)
 }
 
 func merge(raw []byte, homeDir string, remove bool) ([]byte, error) {
-	if !gjson.ValidBytes(raw) || !gjson.ParseBytes(raw).IsObject() {
+	if !gjson.ParseBytes(raw).IsObject() {
 		return nil, errors.New("not a JSON object")
 	}
 	if h := gjson.GetBytes(raw, "hooks"); h.Exists() && !h.IsObject() {
 		return nil, errors.New("hooks: not a JSON object")
 	}
-	add := map[string]string{}
-	if !remove {
-		add["SessionStart"] = group("", hookCommand(homeDir, "session-start"))
-		add["Notification"] = group(notificationMatcher, hookCommand(homeDir, "notification"))
-		add["Stop"] = group("", hookCommand(homeDir, "stop"))
-	}
 	out := raw
 	var err error
-	for _, event := range []string{"SessionStart", "Notification", "Stop"} {
-		path := "hooks." + event
+	for _, hook := range hooks {
+		path := "hooks." + hook.event
 		groups := gjson.GetBytes(out, path)
 		if groups.Exists() && !groups.IsArray() {
-			return nil, fmt.Errorf("hooks.%s: not an array", event)
+			return nil, fmt.Errorf("%s: not an array", path)
 		}
 		list := groups.Array()
 		for i := len(list) - 1; i >= 0; i-- {
@@ -140,8 +129,8 @@ func merge(raw []byte, homeDir string, remove bool) ([]byte, error) {
 				}
 			}
 		}
-		if g, ok := add[event]; ok {
-			if out, err = sjson.SetRawBytes(out, path+".-1", []byte(g)); err != nil {
+		if !remove {
+			if out, err = sjson.SetRawBytes(out, path+".-1", group(hookCommand(homeDir, hook.arg))); err != nil {
 				return nil, err
 			}
 		}
@@ -165,12 +154,7 @@ type hookEntry struct {
 	Timeout int    `json:"timeout"`
 }
 
-type hookGroup struct {
-	Matcher string      `json:"matcher,omitempty"`
-	Hooks   []hookEntry `json:"hooks"`
-}
-
-func group(matcher, command string) string {
-	b, _ := json.Marshal(hookGroup{Matcher: matcher, Hooks: []hookEntry{{Type: "command", Command: command, Timeout: 5}}})
-	return string(b)
+func group(command string) []byte {
+	b, _ := json.Marshal(map[string][]hookEntry{"hooks": {{Type: "command", Command: command, Timeout: 5}}})
+	return b
 }

@@ -2,6 +2,7 @@ package install
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -48,16 +49,12 @@ func Enroll(h *home.Home, o EnrollOptions) error {
 		if cfg.Machine == "" {
 			cfg.Machine = name
 		}
-	case o.TokenFile != "" || os.Getenv("HUBD_TOKEN") != "":
-		t := os.Getenv("HUBD_TOKEN")
-		if o.TokenFile != "" {
-			b, err := os.ReadFile(o.TokenFile)
-			if err != nil {
-				return fmt.Errorf("read token file: %w", err)
-			}
-			t = string(b)
+	case o.TokenFile != "":
+		b, err := os.ReadFile(o.TokenFile)
+		if err != nil {
+			return fmt.Errorf("read token file: %w", err)
 		}
-		token = strings.TrimSpace(t)
+		token = strings.TrimSpace(string(b))
 		if err := checkToken(cfg.URL, token); err != nil {
 			if old, oerr := h.Token(); oerr == nil && checkToken(cfg.URL, old) == nil {
 				return fmt.Errorf("hubd rejects the given token (%v); the installed token still works and was kept", err)
@@ -116,18 +113,28 @@ func redeem(url, code string) (string, string, error) {
 }
 
 func checkToken(url, token string) error {
-	req, err := http.NewRequest(http.MethodGet, url+"/api/client/hello", nil)
+	_, err := Get(context.Background(), httpClient, url+"/api/client/hello", token, 1<<16)
+	return err
+}
+
+func Get(ctx context.Context, c *http.Client, url, token string, limit int64) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	req.Header.Set("Authorization", "Bearer "+token)
-	resp, err := httpClient.Do(req)
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	resp, err := c.Do(req)
 	if err != nil {
-		return fmt.Errorf("reach hubd: %w", err)
+		return nil, err
 	}
-	resp.Body.Close()
+	b, err := io.ReadAll(io.LimitReader(resp.Body, limit))
+	if err := errors.Join(err, resp.Body.Close()); err != nil {
+		return nil, err
+	}
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("HTTP %d", resp.StatusCode)
+		return nil, fmt.Errorf("%s: HTTP %d", url, resp.StatusCode)
 	}
-	return nil
+	return b, nil
 }

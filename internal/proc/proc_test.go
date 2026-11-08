@@ -2,32 +2,9 @@ package proc
 
 import (
 	"os"
-	"os/exec"
 	"path/filepath"
 	"testing"
 )
-
-func TestAliveComparesStartTime(t *testing.T) {
-	pid := int32(os.Getpid())
-	started, ok := StartTime(pid)
-	if !ok {
-		t.Fatal("no start time for self")
-	}
-	if !Alive(pid, started) {
-		t.Error("self not alive with its own start time")
-	}
-	if !Alive(pid, started/1000) {
-		t.Error("start time in seconds not accepted")
-	}
-	if Alive(pid, started-60_000) {
-		t.Error("a reused pid with a different start time counted as alive")
-	}
-	dead := exec.Command("true")
-	dead.Run()
-	if Alive(int32(dead.Process.Pid), started) {
-		t.Error("exited process counted as alive")
-	}
-}
 
 func TestStatStartMatchesItself(t *testing.T) {
 	a, ok := StatStart(int32(os.Getpid()))

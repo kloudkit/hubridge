@@ -15,7 +15,6 @@ import (
 
 	"github.com/kloudkit/hubridge/internal/home"
 	"github.com/kloudkit/hubridge/internal/mask"
-	"github.com/kloudkit/hubridge/internal/proc"
 	"github.com/kloudkit/hubridge/internal/protocol"
 	"github.com/kloudkit/hubridge/internal/registry"
 	"github.com/kloudkit/hubridge/internal/transcript"
@@ -32,8 +31,6 @@ type Sink interface {
 	Live(protocol.Live)
 }
 
-type Alive func(home.Handover) bool
-
 type session struct {
 	main *transcript.File
 	subs map[string]*transcript.File
@@ -46,10 +43,6 @@ type owner struct {
 
 type Tracker struct {
 	Root            string
-	Handovers       func() map[string]home.Handover
-	Waiting         func() map[string]time.Time
-	Clear           func(id string)
-	Alive           Alive
 	Registry        *registry.Registry
 	Background      func() map[string]home.Background
 	ClearBackground func(id string)
@@ -64,32 +57,27 @@ type Tracker struct {
 	bgs      map[string]home.Background
 	sessions map[string]*session
 	sent     map[string]protocol.Summary
-	errs     map[string]int
 	lastLive *protocol.Live
-	waits    map[string]time.Time
 	roots    map[string]string
 	topics   map[string]claimTopics
 	remotes  map[string]string
 }
 
-func New(root string, handovers func() map[string]home.Handover, log *slog.Logger) *Tracker {
+func New(root string, log *slog.Logger) *Tracker {
 	return &Tracker{
 		Root:            root,
-		Handovers:       handovers,
-		Alive:           func(h home.Handover) bool { return proc.Alive(h.PID, h.Started) },
+		Registry:        registry.New(filepath.Join(filepath.Dir(root), "sessions")),
 		Log:             log,
 		Now:             time.Now,
 		Estate:          estateDir(),
-		Waiting:         func() map[string]time.Time { return nil },
-		Clear:           func(string) {},
 		Background:      func() map[string]home.Background { return nil },
 		ClearBackground: func(string) {},
 		sessions:        map[string]*session{},
 		owners:          map[string]owner{},
 		dirty:           map[string]bool{},
 		sent:            map[string]protocol.Summary{},
-		errs:            map[string]int{},
 		roots:           map[string]string{},
+		topics:          map[string]claimTopics{},
 		remotes:         map[string]string{},
 	}
 }
@@ -133,15 +121,13 @@ func (t *Tracker) Touch(path string) (string, bool) {
 		}
 		f = s.subs[path]
 	}
-	if _, err := f.Update(); err != nil && !os.IsNotExist(err) {
+	if err := f.Update(); err != nil && !os.IsNotExist(err) {
 		t.Log.Warn("read transcript", "path", path, "err", err)
 	}
-	if n := len(f.Errors); n > t.errs[path] {
-		for _, e := range f.Errors[t.errs[path]:] {
-			t.Log.Error("transcript parse failure", "at", e)
-		}
-		t.errs[path] = n
+	for _, e := range f.Errors {
+		t.Log.Error("transcript parse failure", "at", e)
 	}
+	f.Errors = nil
 	t.claim(id, f)
 	return id, true
 }
@@ -163,9 +149,6 @@ func (t *Tracker) claim(id string, f *transcript.File) {
 func (t *Tracker) better(cand, cur owner) bool {
 	if cand.main != cur.main {
 		return cand.main
-	}
-	if cand.session == cur.session {
-		return false
 	}
 	cs, us := t.sessions[cand.session], t.sessions[cur.session]
 	if cs != nil && cs.main != nil && cs.main.ContinuedIn == cur.session {
@@ -240,24 +223,14 @@ func (t *Tracker) owned(id string, s *session) []*transcript.Msg {
 }
 
 func (t *Tracker) registrySessions() map[string]registry.Session {
-	if t.Registry == nil || !t.Registry.Available() {
+	if !t.Registry.Available() {
 		return nil
 	}
 	return t.Registry.Sessions()
 }
 
 func liveIn(r registry.Session) bool {
-	if r.Running() {
-		return true
-	}
-	if r.Kind != registry.Background {
-		return false
-	}
-	switch r.JobState {
-	case "failed", "stopped", "":
-		return false
-	}
-	return true
+	return r.Running() || (r.JobState != "" && r.JobState != "failed" && r.JobState != "stopped")
 }
 
 func (t *Tracker) Scan() []string {
@@ -282,9 +255,9 @@ func (t *Tracker) Scan() []string {
 }
 
 func (t *Tracker) Emit(sink Sink, ids []string) {
-	hos, waits, regs, bgs := t.Handovers(), t.Waiting(), t.registrySessions(), t.Background()
+	regs, bgs := t.registrySessions(), t.Background()
 	t.mu.Lock()
-	t.waits, t.regs, t.bgs = waits, regs, bgs
+	t.regs, t.bgs = regs, bgs
 	want := map[string]bool{}
 	for _, id := range ids {
 		want[id] = true
@@ -298,14 +271,14 @@ func (t *Tracker) Emit(sink Sink, ids []string) {
 	t.dirty = map[string]bool{}
 	var out []protocol.Summary
 	for _, id := range ids {
-		sum, ok := t.summary(id, hos)
+		sum, ok := t.summary(id)
 		if !ok || reflect.DeepEqual(t.sent[id], sum) {
 			continue
 		}
 		t.sent[id] = sum
 		out = append(out, sum)
 	}
-	live := t.live(hos)
+	live := t.live()
 	changed := t.lastLive == nil || !reflect.DeepEqual(*t.lastLive, live)
 	t.lastLive = &live
 	t.mu.Unlock()
@@ -315,13 +288,6 @@ func (t *Tracker) Emit(sink Sink, ids []string) {
 	if changed {
 		sink.Live(live)
 	}
-}
-
-func (t *Tracker) EmitAll(sink Sink) {
-	t.mu.Lock()
-	ids := slices.Sorted(maps.Keys(t.sessions))
-	t.mu.Unlock()
-	t.Emit(sink, ids)
 }
 
 func (t *Tracker) EmitLive(sink Sink) {
@@ -357,14 +323,14 @@ func (t *Tracker) NeedsReason() bool {
 }
 
 func (t *Tracker) Snapshot() ([]protocol.Summary, protocol.Live) {
-	hos, waits, regs, bgs := t.Handovers(), t.Waiting(), t.registrySessions(), t.Background()
+	regs, bgs := t.registrySessions(), t.Background()
 	t.mu.Lock()
-	t.waits, t.regs, t.bgs = waits, regs, bgs
+	t.regs, t.bgs = regs, bgs
 	defer t.mu.Unlock()
-	live := t.live(hos)
+	live := t.live()
 	var sums []protocol.Summary
 	for _, id := range live.Live {
-		if s, ok := t.summary(id, hos); ok {
+		if s, ok := t.summary(id); ok {
 			t.sent[id] = s
 			sums = append(sums, s)
 		}
@@ -374,24 +340,20 @@ func (t *Tracker) Snapshot() ([]protocol.Summary, protocol.Live) {
 }
 
 func (t *Tracker) AnyLive() bool {
-	hos, regs := t.Handovers(), t.registrySessions()
+	regs := t.registrySessions()
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.regs = regs
-	return len(t.live(hos).Live) > 0
+	return len(t.live().Live) > 0
 }
 
-func (t *Tracker) live(hos map[string]home.Handover) protocol.Live {
+func (t *Tracker) live() protocol.Live {
 	var live, present []string
 	for id, s := range t.sessions {
 		if s.main == nil || s.main.First.IsZero() || s.main.Headless {
 			continue
 		}
-		if t.regs != nil {
-			if r, ok := t.regs[id]; ok && liveIn(r) {
-				live = append(live, id)
-			}
-		} else if ho, ok := hos[id]; ok && t.Alive(ho) {
+		if r, ok := t.regs[id]; ok && liveIn(r) {
 			live = append(live, id)
 		}
 		if _, err := os.Stat(s.main.Path); err != nil {
@@ -406,7 +368,7 @@ func (t *Tracker) live(hos map[string]home.Handover) protocol.Live {
 	return protocol.NewLive(live, present)
 }
 
-func (t *Tracker) summary(id string, hos map[string]home.Handover) (protocol.Summary, bool) {
+func (t *Tracker) summary(id string) (protocol.Summary, bool) {
 	s := t.sessions[id]
 	if s == nil || s.main == nil || s.main.First.IsZero() || s.main.Headless {
 		return protocol.Summary{}, false
@@ -415,10 +377,6 @@ func (t *Tracker) summary(id string, hos map[string]home.Handover) (protocol.Sum
 	files := s.files()
 	first, last := m.First, m.Last
 	todos := append([]string{}, m.Todos...)
-	seenTodo := map[string]bool{}
-	for _, id := range todos {
-		seenTodo[id] = true
-	}
 	for _, f := range files[1:] {
 		if !f.First.IsZero() && f.First.Before(first) {
 			first = f.First
@@ -427,8 +385,7 @@ func (t *Tracker) summary(id string, hos map[string]home.Handover) (protocol.Sum
 			last = f.Last
 		}
 		for _, id := range f.Todos {
-			if !seenTodo[id] {
-				seenTodo[id] = true
+			if !slices.Contains(todos, id) {
 				todos = append(todos, id)
 			}
 		}
@@ -444,7 +401,7 @@ func (t *Tracker) summary(id string, hos map[string]home.Handover) (protocol.Sum
 		Excerpt:     Excerpt(m.LastPrompt),
 		StartedAt:   protocol.Time(first),
 		LastEventAt: protocol.Time(last),
-		Tokens:      days,
+		Tokens:      append([]protocol.DayTokens{}, days...),
 		Hours:       hours,
 		TodoWrites:  todos,
 		CustomTitle: m.CustomTitle,
@@ -460,28 +417,7 @@ func (t *Tracker) summary(id string, hos map[string]home.Handover) (protocol.Sum
 		LimitHits:   m.Limits,
 		PRs:         m.PRs,
 	}
-	if len(models) == 0 {
-		sum.Models = nil
-	}
-	if t.regs != nil {
-		t.registryState(&sum, id, m)
-		return sum, true
-	}
-	ho, handed := hos[id]
-	switch {
-	case !handed || !t.Alive(ho):
-		if _, ok := t.waits[id]; ok {
-			delete(t.waits, id)
-			t.Clear(id)
-		}
-		ended(&sum)
-	case t.flagged(id, m):
-		sum.State = "waiting"
-	case m.Working:
-		sum.State = "working"
-	default:
-		sum.State = "waiting"
-	}
+	t.registryState(&sum, id, m)
 	return sum, true
 }
 
@@ -542,19 +478,6 @@ func (t *Tracker) registryState(sum *protocol.Summary, id string, m *transcript.
 			sum.State = "waiting"
 		}
 	}
-}
-
-func (t *Tracker) flagged(id string, m *transcript.File) bool {
-	at, ok := t.waits[id]
-	if !ok {
-		return false
-	}
-	if m.UserAt.After(at) {
-		delete(t.waits, id)
-		t.Clear(id)
-		return false
-	}
-	return true
 }
 
 func Excerpt(prompt string) string {

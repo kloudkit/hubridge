@@ -5,25 +5,7 @@ on:
   push:
     branches:
       - main
-    paths:
-      - .github/workflows/**
-      - .goreleaser.yaml
-      - CHANGELOG.md
-      - go.mod
-      - go.sum
-      - install.sh
-      - internal/**
-      - main.go
   pull_request:
-    paths:
-      - .github/workflows/**
-      - .goreleaser.yaml
-      - CHANGELOG.md
-      - go.mod
-      - go.sum
-      - install.sh
-      - internal/**
-      - main.go
   workflow_call:
 
 permissions:
