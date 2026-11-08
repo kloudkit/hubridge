@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -20,6 +21,7 @@ import (
 	"github.com/kloudkit/hubridge/internal/registry"
 	"github.com/kloudkit/hubridge/internal/rules"
 	"github.com/kloudkit/hubridge/internal/sessions"
+	"github.com/kloudkit/hubridge/internal/status"
 	"github.com/kloudkit/hubridge/internal/transcript"
 )
 
@@ -313,4 +315,27 @@ func CheckRules(r *Report, homeDir string) {
 	if len(missing) > 0 {
 		r.add(Info, "rules", "not on disk: %s; the daemon writes it back when it starts or refreshes", strings.Join(missing, ", "))
 	}
+}
+
+func CheckStatus(r *Report, now time.Time) {
+	path, err := status.Path()
+	if err != nil {
+		r.add(Info, "status", "no Claude config dir, so the status file was not checked")
+		return
+	}
+	s, err := status.Read(path)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		r.add(Info, "status", "%s: not written yet; the daemon writes it when it starts", path)
+		return
+	case err != nil:
+		r.add(Info, "status", "%v", err)
+		return
+	}
+	age := now.Sub(s.Since).Round(time.Second)
+	if s.State == status.Connected {
+		r.add(OK, "status", "%s: connected to %s for %s", path, s.URL, age)
+		return
+	}
+	r.add(Info, "status", "%s: %s for %s: %s", path, s.State, age, s.Error)
 }

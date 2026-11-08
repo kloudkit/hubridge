@@ -39,7 +39,7 @@ commands:
   supervise    restart loop for run (--detach to background it)
   mcp-headers  print the Authorization header for Claude Code's MCP headersHelper
   statusline   run by Claude Code as its status line: keep the usage reading, then run the original
-  doctor       check the Claude Code formats the daemon reads against the pinned ones (--days 7) and list the instruction files
+  doctor       check the Claude Code formats the daemon reads against the pinned ones (--days 7), list the instruction files and read the status file
   update       install the newest build of the saved channel (--version bundled|latest|<tag> changes the channel)
   version      print the version and the update channel
 
@@ -405,6 +405,7 @@ func doctorCmd(args []string) int {
 	})
 	rep := doctor.Run(context.Background(), projects, days)
 	doctor.CheckRules(rep, h.Dir)
+	doctor.CheckStatus(rep, time.Now())
 	rep.Write(os.Stdout)
 	switch rep.Worst() {
 	case doctor.Fail:
