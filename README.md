@@ -1,3 +1,5 @@
+![hubridge — your bridge to mission control by KloudKIT](https://raw.githubusercontent.com/kloudkit/hubridge/main/brand/hubridge-banner.svg)
+
 # KloudKIT • hubridge
 
 > 🌉 Your bridge to mission control
@@ -28,3 +30,11 @@ starts, before it reaches hubd, it rewrites any of them that is missing or chang
 recreated container gets its instructions back while hubd is down. A new machine gets them at
 its first connect. When hubd stops sending a file, hubridge removes it; it removes only files
 it wrote and leaves anything else in the folder alone.
+
+## License
+
+Released under the [**MIT License**](https://github.com/kloudkit/hubridge/blob/main/LICENSE),
+**except** the [`brand/`](https://github.com/kloudkit/hubridge/tree/main/brand) directory.
+
+The hubridge and KloudKIT logos, icons and other brand assets are proprietary and
+**all rights reserved**; see [`brand/LICENSE`](https://github.com/kloudkit/hubridge/blob/main/brand/LICENSE).
