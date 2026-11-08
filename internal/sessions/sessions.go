@@ -48,7 +48,6 @@ type Tracker struct {
 	ClearBackground func(id string)
 	Log             *slog.Logger
 	Now             func() time.Time
-	Estate          string
 
 	mu       sync.Mutex
 	owners   map[string]owner
@@ -59,7 +58,6 @@ type Tracker struct {
 	sent     map[string]protocol.Summary
 	lastLive *protocol.Live
 	roots    map[string]string
-	topics   map[string]claimTopics
 	remotes  map[string]string
 }
 
@@ -69,7 +67,6 @@ func New(root string, log *slog.Logger) *Tracker {
 		Registry:        registry.New(filepath.Join(filepath.Dir(root), "sessions")),
 		Log:             log,
 		Now:             time.Now,
-		Estate:          estateDir(),
 		Background:      func() map[string]home.Background { return nil },
 		ClearBackground: func(string) {},
 		sessions:        map[string]*session{},
@@ -77,7 +74,6 @@ func New(root string, log *slog.Logger) *Tracker {
 		dirty:           map[string]bool{},
 		sent:            map[string]protocol.Summary{},
 		roots:           map[string]string{},
-		topics:          map[string]claimTopics{},
 		remotes:         map[string]string{},
 	}
 }
@@ -408,7 +404,6 @@ func (t *Tracker) summary(id string) (protocol.Summary, bool) {
 		Name:        m.AgentName,
 		Version:     m.Version,
 		Branch:      m.Branch,
-		Topics:      t.readTopics(files),
 		ContinuedIn: m.ContinuedIn,
 		Models:      models,
 		Ledger:      m.Ledger,

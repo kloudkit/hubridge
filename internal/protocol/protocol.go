@@ -128,7 +128,6 @@ type Summary struct {
 	Job         *Job          `json:"job,omitempty"`
 	Version     string        `json:"version,omitempty"`
 	Branch      string        `json:"branch,omitempty"`
-	Topics      []string      `json:"topics,omitempty"`
 	ContinuedIn string        `json:"continuedIn,omitempty"`
 	Models      []ModelTokens `json:"models,omitempty"`
 	Ledger      *Ledger       `json:"ledger,omitempty"`
