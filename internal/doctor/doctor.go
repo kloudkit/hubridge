@@ -18,6 +18,7 @@ import (
 	"github.com/tidwall/gjson"
 
 	"github.com/kloudkit/hubridge/internal/registry"
+	"github.com/kloudkit/hubridge/internal/rules"
 	"github.com/kloudkit/hubridge/internal/sessions"
 	"github.com/kloudkit/hubridge/internal/transcript"
 )
@@ -273,4 +274,36 @@ func checkStates(r *Report, tr *sessions.Tracker, agents []registry.Agent) {
 		r.add(Info, "states", "%d running sessions have no transcript yet, or are headless", missing)
 	}
 	r.add(OK, "states", "%d running sessions have the state claude agents --json gives them", matched)
+}
+
+func CheckRules(r *Report, homeDir string) {
+	dir, err := rules.Dir()
+	if err != nil || homeDir == "" {
+		r.add(Info, "rules", "no Claude config dir or client home, so the session rules were not checked")
+		return
+	}
+	m, found, err := rules.ReadManifest(filepath.Join(homeDir, rules.ManifestFile))
+	switch {
+	case err != nil:
+		r.add(Info, "rules", "%v", err)
+		return
+	case !found:
+		r.add(Info, "rules", "%s: nothing written yet; the daemon writes the built-ins when it starts", dir)
+		return
+	}
+	names := slices.Sorted(maps.Keys(m.Files))
+	var missing []string
+	for _, n := range names {
+		if _, err := os.Stat(filepath.Join(dir, n)); err != nil {
+			missing = append(missing, n)
+		}
+	}
+	listed := strings.Join(names, ", ")
+	if listed == "" {
+		listed = "no files"
+	}
+	r.add(OK, "rules", "%s: %s", dir, listed)
+	if len(missing) > 0 {
+		r.add(Info, "rules", "not on disk: %s; the next refresh restores what hubd still wants", strings.Join(missing, ", "))
+	}
 }

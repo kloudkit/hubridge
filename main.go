@@ -19,6 +19,7 @@ import (
 	"github.com/kloudkit/hubridge/internal/install"
 	"github.com/kloudkit/hubridge/internal/proc"
 	"github.com/kloudkit/hubridge/internal/protocol"
+	"github.com/kloudkit/hubridge/internal/rules"
 	"github.com/kloudkit/hubridge/internal/sessions"
 	"github.com/kloudkit/hubridge/internal/update"
 	"github.com/kloudkit/hubridge/internal/usage"
@@ -30,14 +31,14 @@ var version, commit = "dev", ""
 const help = `usage: hubridge [command] [flags]
 
 commands:
-  run          watch transcripts and stream them to hubd (default)
+  run          watch transcripts and stream them to hubd, and mirror its session rules (default)
   enroll       --url <hubd> (--code <code> | --token-file <path>) [--machine <name>]
   setup        add the hubd hooks to Claude Code's settings.json and wrap its status line (--remove undoes both)
   hook         session-start | stop, run by Claude Code
   supervise    restart loop for run (--detach to background it)
   mcp-headers  print the Authorization header for Claude Code's MCP headersHelper
   statusline   run by Claude Code as its status line: keep the usage reading, then run the original
-  doctor       check the Claude Code formats the daemon reads against the pinned ones (--days 7)
+  doctor       check the Claude Code formats the daemon reads against the pinned ones (--days 7) and list the mirrored rules
   update       install the newest build of the saved channel (--version bundled|latest|<tag> changes the channel)
   version      print the version and the update channel
 
@@ -269,6 +270,15 @@ func run(args []string) error {
 		log.Warn("claude not found on PATH: live state comes from the registry files alone, with no waiting reasons or background sessions")
 	}
 	client := wsclient.New(cfg.URL, cfg.Machine, version, cfg.Channel, h, tracker.Snapshot, log)
+	if dir, err := rules.Dir(); err != nil {
+		log.Warn("no Claude config dir, so session rules are not mirrored", "err", err)
+	} else {
+		mirror := rules.New(cfg.URL, cfg.Machine, h, dir, log)
+		if err := mirror.Seed(); err != nil {
+			log.Warn("write the built-in session rules", "err", err)
+		}
+		client.Rules = mirror.Refresh
+	}
 	watchErr := make(chan error, 1)
 	go func() { watchErr <- tracker.Watch(ctx, client, sessions.DefaultIntervals) }()
 	go usage.Watch(ctx, h, client.Usage, tracker.AnyLive, probe(h.Dir), log, usage.DefaultIntervals)
@@ -382,11 +392,12 @@ func rewrap(ctx context.Context, h *home.Home, log *slog.Logger) {
 func doctorCmd(args []string) int {
 	var projects string
 	var days int
-	_, _ = parse("doctor", args, flag.ExitOnError, false, func(fs *flag.FlagSet) {
+	h, _ := parse("doctor", args, flag.ExitOnError, false, func(fs *flag.FlagSet) {
 		fs.StringVar(&projects, "projects", projectsDir(), "Claude Code transcripts root")
 		fs.IntVar(&days, "days", 7, "how many days of transcripts to read")
 	})
 	rep := doctor.Run(context.Background(), projects, days)
+	doctor.CheckRules(rep, h.Dir)
 	rep.Write(os.Stdout)
 	switch rep.Worst() {
 	case doctor.Fail:

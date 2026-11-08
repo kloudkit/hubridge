@@ -53,6 +53,7 @@ type Client struct {
 	Home     *home.Home
 	Queue    *home.Queue
 	Snapshot Snapshot
+	Rules    func(context.Context) error
 	Log      *slog.Logger
 
 	Ping       time.Duration
@@ -171,6 +172,13 @@ func (c *Client) connect(ctx context.Context) (bool, error) {
 		return false, fmt.Errorf("expected welcome, got %q", first.Type)
 	}
 	c.Log.Info("connected to hubd", "protocol", first.Protocol)
+	if c.Rules != nil {
+		go func() {
+			if err := c.Rules(ctx); err != nil {
+				c.Log.Warn("refresh the session rules", "err", err)
+			}
+		}()
+	}
 
 	sctx, stop := context.WithCancelCause(ctx)
 	defer stop(nil)
@@ -289,6 +297,12 @@ func (c *Client) command(ctx context.Context, conn *websocket.Conn, m protocol.S
 			rotated = true
 			c.Log.Info("token rotated; reconnecting")
 		}
+	case "sync":
+		if c.Rules != nil {
+			go c.sync(ctx, conn, res)
+			return false
+		}
+		res.OK, res.Error = false, "unsupported command: sync"
 	default:
 		res.OK, res.Error = false, "unsupported command: "+m.Command
 	}
@@ -296,6 +310,15 @@ func (c *Client) command(ctx context.Context, conn *websocket.Conn, m protocol.S
 		c.Log.Warn("send result", "err", err)
 	}
 	return rotated
+}
+
+func (c *Client) sync(ctx context.Context, conn *websocket.Conn, res protocol.Result) {
+	if err := c.Rules(ctx); err != nil {
+		res.OK, res.Error = false, "sync the session rules: "+err.Error()
+	}
+	if err := c.write(ctx, conn, res); err != nil {
+		c.Log.Warn("send result", "err", err)
+	}
 }
 
 func (c *Client) write(ctx context.Context, conn *websocket.Conn, v any) error {

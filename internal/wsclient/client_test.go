@@ -32,6 +32,7 @@ type frame struct {
 	ID      string           `json:"id"`
 	Of      string           `json:"of"`
 	OK      bool             `json:"ok"`
+	Error   string           `json:"error"`
 	Session protocol.Summary `json:"session"`
 	Live    []string         `json:"live"`
 }
@@ -205,7 +206,7 @@ func TestClientLifecycle(t *testing.T) {
 	p.next(false)
 	p.send(schemas, `{"type":"welcome","protocol":1}`)
 	p.next(true)
-	p.send(schemas, `{"type":"command","id":"c2","command":"sync","args":{}}`)
+	p.send(schemas, `{"type":"command","id":"c2","command":"restore","args":{"sessionId":"s1"}}`)
 	for {
 		f := p.next(true)
 		if f.Type == "result" {
@@ -337,4 +338,66 @@ func TestUsageIsSentAfterConnectAndOnChange(t *testing.T) {
 	if f := p.next(true); f.Type != "usage" || f.Usage.Source != "statusline" {
 		t.Fatalf("a new reading was not sent: %+v", f)
 	}
+}
+
+func TestRulesRefreshAfterWelcomeAndOnSync(t *testing.T) {
+	schemas := schematest.Load(t)
+	srv := &fakeServer{t: t, schemas: schemas, peers: make(chan *peer, 4)}
+	ts := httptest.NewServer(srv)
+	defer ts.Close()
+	h, err := home.Open(filepath.Join(t.TempDir(), "home"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.WriteToken(oldToken); err != nil {
+		t.Fatal(err)
+	}
+	c := New(ts.URL, "ws", "test", "bundled", h, func() ([]protocol.Summary, protocol.Live) { return nil, protocol.NewLive(nil, nil) }, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	c.Ping = time.Hour
+	refreshed := make(chan struct{}, 4)
+	fail := make(chan error, 1)
+	c.Rules = func(context.Context) error {
+		var err error
+		select {
+		case err = <-fail:
+		default:
+		}
+		refreshed <- struct{}{}
+		return err
+	}
+	waitRefresh := func(why string) {
+		t.Helper()
+		select {
+		case <-refreshed:
+		case <-time.After(5 * time.Second):
+			t.Fatalf("no refresh %s", why)
+		}
+	}
+	go func() { _ = c.Run(t.Context()) }()
+
+	p := srv.accept(t)
+	p.next(false)
+	fail <- errors.New("hubd unreachable")
+	p.send(schemas, `{"type":"welcome","protocol":1}`)
+	waitRefresh("after welcome")
+	p.next(true)
+
+	p.send(schemas, `{"type":"command","id":"c1","command":"sync","args":{}}`)
+	waitRefresh("on sync")
+	if f := p.next(true); f.Type != "result" || f.Of != "c1" || !f.OK || f.Error != "" {
+		t.Fatalf("sync result %+v", f)
+	}
+
+	fail <- errors.New("rules: HTTP 500")
+	p.send(schemas, `{"type":"command","id":"c2","command":"sync","args":{}}`)
+	waitRefresh("on the second sync")
+	if f := p.next(true); f.Type != "result" || f.Of != "c2" || f.OK || !strings.Contains(f.Error, "rules: HTTP 500") {
+		t.Fatalf("failed sync result %+v", f)
+	}
+
+	_ = p.conn.Close(websocket.StatusInternalError, "restart")
+	p = srv.accept(t)
+	p.next(false)
+	p.send(schemas, `{"type":"welcome","protocol":1}`)
+	waitRefresh("after the second welcome")
 }
