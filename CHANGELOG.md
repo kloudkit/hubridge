@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-08
+
+### Changed
+
+- 📜 Write only the instructions hubd sends into `~/.claude/rules/hubd/`, and ignore the `builtins` key older hubd versions still send
+- 💾 Keep each file's body in `rules.json`, and rewrite any listed file that is missing or changed when the daemon starts, before it reaches hubd; a v0.2.0 manifest is read, and rewritten at the next fetch
+- 🔁 Retry a failed fetch, after a connect or on `sync`, from 5 seconds up to every 5 minutes, until it succeeds or the connection closes
+- 🩺 Say in `hubridge doctor` whether the instructions are restorable offline
+
+### Removed
+
+- 🔥 The built-in rules shipped in the binary (the estate manual, secrets, shared git checkouts); the operator brings their own instructions through hubd
+
+### Fixed
+
+- 🐛 Keep the files when hubd answers 404, as a reverse proxy does during a deploy, instead of replacing them with the built-ins
+
 ## [0.2.0] - 2026-11-08
 
 ### Added
@@ -27,6 +44,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 🔄 Update with `hubridge update`, and in the background on the saved channel
 - 🔏 Check every update against the release's signed manifest and the protocol hubd speaks
 
-[Unreleased]: https://github.com/kloudkit/hubridge/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/kloudkit/hubridge/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/kloudkit/hubridge/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/kloudkit/hubridge/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/kloudkit/hubridge/releases/tag/v0.1.0
