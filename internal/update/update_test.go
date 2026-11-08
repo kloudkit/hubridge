@@ -207,10 +207,10 @@ func TestRefusesAChecksumMismatch(t *testing.T) {
 	fx.bundle(release{"v0.2.0", 1, "v0.2.0 build"})
 	fx.files["/install/files/hubridge-linux-amd64"] = []byte("tampered")
 	_, err := fx.u.Run(context.Background(), "bundled", true)
-	if err == nil || !strings.Contains(err.Error(), "checksum mismatch") || fx.binary() != "current" {
+	if err == nil || !strings.Contains(err.Error(), "wrong checksum") || fx.binary() != "current" {
 		t.Fatalf("err %v, binary %q", err, fx.binary())
 	}
-	if _, err := os.Stat(filepath.Join(filepath.Dir(install.Binary(fx.u.Home.Dir)), ".download")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(filepath.Dir(install.Binary(fx.u.Home.Dir)), ".hubridge.new")); !os.IsNotExist(err) {
 		t.Fatal("the download was left behind")
 	}
 }

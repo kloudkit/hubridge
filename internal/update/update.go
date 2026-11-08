@@ -1,9 +1,9 @@
 package update
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
-	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -12,12 +12,11 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"os"
-	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
 
+	"github.com/minio/selfupdate"
 	"golang.org/x/mod/semver"
 
 	"github.com/kloudkit/hubridge/internal/home"
@@ -189,45 +188,19 @@ func (u *Updater) get(ctx context.Context, url string, limit int64) ([]byte, err
 }
 
 func (u *Updater) install(ctx context.Context, url, want string) error {
+	sum, err := hex.DecodeString(want)
+	if err != nil {
+		return fmt.Errorf("%s: the manifest has a malformed checksum", url)
+	}
+	body, err := u.get(ctx, url, 1<<28)
+	if err != nil {
+		return err
+	}
 	bin := install.Binary(u.Home.Dir)
-	if err := os.MkdirAll(filepath.Dir(bin), 0o700); err != nil {
-		return err
+	if err := selfupdate.Apply(bytes.NewReader(body), selfupdate.Options{TargetPath: bin, TargetMode: 0o700, Checksum: sum, OldSavePath: bin + ".prev"}); err != nil {
+		return fmt.Errorf("%s: %w", url, err)
 	}
-	tmp := filepath.Join(filepath.Dir(bin), ".download")
-	defer os.Remove(tmp)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return err
-	}
-	resp, err := u.HTTP.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("%s: HTTP %d", url, resp.StatusCode)
-	}
-	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o700)
-	if err != nil {
-		return err
-	}
-	sum := sha256.New()
-	_, err = io.Copy(io.MultiWriter(f, sum), resp.Body)
-	if cerr := f.Close(); err == nil {
-		err = cerr
-	}
-	if err != nil {
-		return err
-	}
-	if got := hex.EncodeToString(sum.Sum(nil)); got != want {
-		return fmt.Errorf("%s: checksum mismatch", url)
-	}
-	if _, err := os.Stat(bin); err == nil {
-		if err := os.Rename(bin, bin+".prev"); err != nil {
-			return err
-		}
-	}
-	return os.Rename(tmp, bin)
+	return nil
 }
 
 func (u *Updater) Watch(ctx context.Context, channel string, every time.Duration, kick <-chan struct{}, log *slog.Logger) {

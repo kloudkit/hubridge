@@ -57,8 +57,16 @@ jobs:
 
       - name: 🔏 Sign the manifest
         env:
-          HUBRIDGE_SIGNING_KEY: ${{ secrets.KEY__HUBRIDGE_RELEASE }}
-        run: go run ./tools/release manifest --checksums dist/checksums.txt --version "$GITHUB_REF_NAME" --out dist/manifest.json
+          KEY: ${{ secrets.KEY__HUBRIDGE_RELEASE }}
+        run: |
+          umask 077
+          printf '%s\n' "$KEY" > "$RUNNER_TEMP/key.pem"
+          test "$(openssl pkey -in "$RUNNER_TEMP/key.pem" -pubout -outform DER | tail -c 32 | base64 -w0)" = "$(sed -n 's/^var PublicKey = "\(.*\)"$/\1/p' internal/update/update.go)"
+          protocol=$(go list -m -f '{{.Version}}' github.com/kloudkit/hubd/protocol | cut -d. -f1 | tr -d v)
+          jq -Rn --arg v "$GITHUB_REF_NAME" --argjson p "$protocol" \
+            '{version: $v, protocol: $p, assets: ([inputs | split("  ") | {(.[1]): .[0]}] | add)}' < dist/checksums.txt > dist/manifest.json
+          openssl pkeyutl -sign -inkey "$RUNNER_TEMP/key.pem" -rawin -in dist/manifest.json | base64 -w0 > dist/manifest.json.sig
+          rm "$RUNNER_TEMP/key.pem"
 
       - name: 🔖 Publish the release
         env:
