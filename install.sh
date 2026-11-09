@@ -8,7 +8,7 @@ TOKEN_FILE=''
 VERSION=''
 if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
   B=$(printf '\033[1m'); D=$(printf '\033[2m'); R=$(printf '\033[0m')
-  G=$(printf '\033[32m'); E=$(printf '\033[31m'); W=$(printf '\033[33m'); A=$(printf '\033[38;5;202m')
+  G=$(printf '\033[32m'); E=$(printf '\033[31m'); W=$(printf '\033[33m'); A=$(printf '\033[38;5;30m')
 else B=''; D=''; R=''; G=''; E=''; W=''; A=''; fi
 die() { printf '  %s✗%s %s\n' "$E" "$R" "$*" >&2; exit 1; }
 ok() { printf '  %s✓%s %s\n' "$G" "$R" "$*"; }
