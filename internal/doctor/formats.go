@@ -14,7 +14,7 @@ var EntryTypes = set(
 
 var SystemSubtypes = set(
 	"turn_duration", "compact_boundary", "local_command", "informational",
-	"away_summary", "api_error", "model_refusal_fallback", "model_refusal_no_fallback",
+	"away_summary", "api_error", "model_refusal_fallback", "model_refusal_no_fallback", "stop_hook_summary",
 )
 
 var UsageFields = []string{

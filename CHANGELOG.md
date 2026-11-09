@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- 🩺 Pin the `stop_hook_summary` system subtype Claude Code writes after every Stop hook, so `hubridge doctor` no longer reports it as drift
+
 ## [0.5.0] - 2026-11-09
 
 ### Added
