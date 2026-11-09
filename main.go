@@ -43,7 +43,7 @@ commands:
   update       install the newest build of the saved channel (--version bundled|latest|<tag> changes the channel)
   version      print the version and the update channel
 
-every command takes --home <dir> (default $HUBD_HOME, else ~/.config/hubd)
+every command takes --home <dir> (default $HUBD_HOME, else $XDG_CONFIG_HOME/hubd, else ~/.config/hubd)
 `
 
 func main() {

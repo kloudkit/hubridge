@@ -119,3 +119,16 @@ func TestQueueSupersedesAndCaps(t *testing.T) {
 		t.Fatalf("cap: %d entries", len(p))
 	}
 }
+
+func TestResolveFollowsXDGConfigHome(t *testing.T) {
+	t.Setenv("HUBD_HOME", "")
+	t.Setenv("XDG_CONFIG_HOME", "/x/cfg")
+	if got, _ := Resolve(""); got != "/x/cfg/hubd" {
+		t.Fatalf("got %q", got)
+	}
+	t.Setenv("XDG_CONFIG_HOME", "relative")
+	t.Setenv("HOME", "/h")
+	if got, _ := Resolve(""); got != "/h/.config/hubd" {
+		t.Fatalf("relative XDG_CONFIG_HOME must be ignored, got %q", got)
+	}
+}

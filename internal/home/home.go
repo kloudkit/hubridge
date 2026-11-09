@@ -28,6 +28,9 @@ func Resolve(flag string) (string, error) {
 	if env := os.Getenv("HUBD_HOME"); env != "" {
 		return filepath.Abs(env)
 	}
+	if x := os.Getenv("XDG_CONFIG_HOME"); filepath.IsAbs(x) {
+		return filepath.Join(x, "hubd"), nil
+	}
 	h, err := os.UserHomeDir()
 	if err != nil {
 		return "", err

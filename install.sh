@@ -2,7 +2,7 @@
 set -eu
 HUBD_URL=''
 CODE=''
-HOME_DIR="${HUBD_HOME:-$HOME/.config/hubd}"
+HOME_DIR="${HUBD_HOME:-${XDG_CONFIG_HOME:-$HOME/.config}/hubd}"
 MACHINE=''
 TOKEN_FILE=''
 VERSION=''
