@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- 🧩 After every connect and on `sync`, the daemon reconciles the plugins from hubd's marketplace with what hubd wants for this machine (`GET /api/client/plugins`): installs and enables what is on, disables what is off, updates a stale version, and reports what the machine has (`POST /api/client/plugins`); core stays on
+
 ### Fixed
 
 - 🔧 `setup` also sets `enabledPlugins` for `hubd@hubd`, so Claude Code registers the marketplace and installs the plugin at the next session start; `claude plugin install` alone cannot see a marketplace declared in settings until a session has started

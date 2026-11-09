@@ -39,9 +39,11 @@ Claude Code's user settings (`extraKnownMarketplaces.hubd`, a `url` source whose
 is `hubridge mcp-headers`, so the catalog and the archive are fetched with the client token),
 installs the plugin with `claude plugin install hubd@hubd`, and writes a launcher at
 `~/.claude/hubd/bin/hubridge` that the plugin's hooks and MCP entry run, since a plugin cannot
-know the client home. `settings.json` keeps only the status line. The daemon runs
-`claude plugin update hubd@hubd` after every connect and on `sync`, and installs the plugin when
-it is missing, so a recreated machine gets it back once hubd answers. `setup --remove` undoes all
+know the client home. `settings.json` keeps only the status line. After every connect and on
+`sync` the daemon asks hubd which plugins this machine should have (`GET /api/client/plugins`),
+installs and enables the ones that are on, disables the ones that are off, updates a stale
+version, and reports what the machine has (`POST /api/client/plugins`); core is always on, so a
+recreated machine gets the plugin back once hubd answers. `setup --remove` undoes all
 of it.
 
 The plugin's MCP entry runs `hubridge mcp`, a stdio server Claude Code starts per session. It

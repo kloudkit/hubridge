@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -338,10 +339,15 @@ func run(args []string) error {
 		if err := mirror.Restore(); err != nil {
 			log.Warn("restore the instructions from the manifest", "err", err)
 		}
+		plugHTTP := &http.Client{Timeout: 30 * time.Second}
 		client.Rules = func(ctx context.Context) error {
 			err := mirror.Refresh(ctx)
-			if perr := install.EnsurePlugin(ctx, io.Discard); perr != nil {
-				log.Warn("hubd's plugin", "err", perr)
+			token, terr := h.Token()
+			if terr != nil {
+				return errors.Join(err, terr)
+			}
+			if perr := install.Reconcile(ctx, plugHTTP, cfg.URL, cfg.Machine, token, io.Discard); perr != nil {
+				log.Warn("hubd's plugins", "err", perr)
 			}
 			return err
 		}
