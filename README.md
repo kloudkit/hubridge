@@ -31,6 +31,23 @@ recreated container gets its instructions back while hubd is down. A new machine
 its first connect. When hubd stops sending a file, hubridge removes it; it removes only files
 it wrote and leaves anything else in the folder alone.
 
+## MCP
+
+`hubridge setup` registers hubd's MCP server in Claude Code's user scope as a stdio command,
+`hubridge mcp --home <dir>`. Claude Code starts one per session; it forwards every tool call to
+`<hubd>/mcp` over HTTPS with the client token, which never leaves hubridge's home. The token
+file is read on every request, so a rotated token takes effect without a restart.
+
+The process keeps the last tool list in `mcp-tools.json` in its home and serves it while hubd
+cannot be reached, so a session starting during a deploy still has its hubd tools; the list is
+refreshed as soon as hubd answers. A call retries with backoff for up to 8 seconds through a
+restart, then returns a tool error naming the reason (`HTTP 503`, `connection refused`,
+`HTTP 401`) instead of failing the session's connection.
+
+It writes `~/.claude/hubd/mcp.json`, in the status file's shape below, saying whether hubd's
+MCP answered the last call and, when not, why. The daemon is not in the path: the MCP works
+without it.
+
 ## Status file
 
 The daemon keeps `~/.claude/hubd/status.json` (under `CLAUDE_CONFIG_DIR` when it is set) saying

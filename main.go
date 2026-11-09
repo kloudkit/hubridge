@@ -17,6 +17,7 @@ import (
 	"github.com/kloudkit/hubridge/internal/doctor"
 	"github.com/kloudkit/hubridge/internal/home"
 	"github.com/kloudkit/hubridge/internal/install"
+	"github.com/kloudkit/hubridge/internal/mcpproxy"
 	"github.com/kloudkit/hubridge/internal/proc"
 	"github.com/kloudkit/hubridge/internal/protocol"
 	"github.com/kloudkit/hubridge/internal/rules"
@@ -25,6 +26,7 @@ import (
 	"github.com/kloudkit/hubridge/internal/update"
 	"github.com/kloudkit/hubridge/internal/usage"
 	"github.com/kloudkit/hubridge/internal/wsclient"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 var version, commit = "dev", ""
@@ -37,7 +39,7 @@ commands:
   setup        add the hubd hooks to Claude Code's settings.json and wrap its status line (--remove undoes both)
   hook         session-start | stop, run by Claude Code
   supervise    restart loop for run (--detach to background it)
-  mcp-headers  print the Authorization header for Claude Code's MCP headersHelper
+  mcp          serve hubd's MCP to one Claude Code session over stdio, forwarding to hubd with the client token
   statusline   run by Claude Code as its status line: keep the usage reading, then run the original
   doctor       check the Claude Code formats the daemon reads against the pinned ones (--days 7), list the instruction files and read the status file
   update       install the newest build of the saved channel (--version bundled|latest|<tag> changes the channel)
@@ -65,6 +67,8 @@ func main() {
 		return
 	case "supervise":
 		err = supervise(args)
+	case "mcp":
+		err = mcpCmd(args)
 	case "mcp-headers":
 		err = mcpHeaders(args)
 	case "statusline":
@@ -166,12 +170,7 @@ func setup(args []string) error {
 	if h, err = home.Open(h.Dir); err != nil {
 		return err
 	}
-	cfg, _ := h.Config()
-	if cfg.URL == "" {
-		fmt.Println("no hubd url in config.json yet, so hubd's MCP server was not registered; run enroll, then setup again")
-		return nil
-	}
-	return install.RegisterMCP(h.Dir, cfg.URL, os.Stdout)
+	return install.RegisterMCP(h.Dir, os.Stdout)
 }
 
 func statusLine(args []string) int {
@@ -188,6 +187,26 @@ func mcpHeaders(args []string) error {
 		return err
 	}
 	return install.Headers(h, os.Stdout)
+}
+
+func mcpCmd(args []string) error {
+	h, err := parse("mcp", args, flag.ExitOnError, true, nil)
+	if err != nil {
+		return err
+	}
+	cfg, err := h.Config()
+	if err != nil {
+		return err
+	}
+	path, err := status.McpPath()
+	if err != nil {
+		return err
+	}
+	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	p := mcpproxy.New(h, strings.TrimRight(cfg.URL, "/")+"/mcp", version, status.New(path, cfg.Machine, cfg.URL, version, log), log)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	return p.Serve(ctx, &mcp.StdioTransport{})
 }
 
 func hook(args []string) {

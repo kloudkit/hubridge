@@ -50,7 +50,7 @@ func TestRegisterMCPRemovesThenAdds(t *testing.T) {
 	log := fakeClaude(t)
 	homeDir := "/Users/me/Application Support/hubd"
 	var out bytes.Buffer
-	if err := RegisterMCP(homeDir, "https://hubd.test/", &out); err != nil {
+	if err := RegisterMCP(homeDir, &out); err != nil {
 		t.Fatal(err)
 	}
 	got := calls(t, log)
@@ -61,22 +61,20 @@ func TestRegisterMCPRemovesThenAdds(t *testing.T) {
 	if len(add) != 6 || strings.Join(add[:5], " ") != "mcp add-json --scope user hubd" {
 		t.Fatalf("add call %q", add)
 	}
-	var cfg map[string]string
+	var cfg struct {
+		Type    string   `json:"type"`
+		Command string   `json:"command"`
+		Args    []string `json:"args"`
+		URL     string   `json:"url"`
+	}
 	if err := json.Unmarshal([]byte(add[5]), &cfg); err != nil {
 		t.Fatal(err)
 	}
-	want := map[string]string{
-		"type":          "http",
-		"url":           "https://hubd.test/mcp",
-		"headersHelper": `"/Users/me/Application Support/hubd/bin/hubridge" mcp-headers --home "/Users/me/Application Support/hubd"`,
-	}
-	for k, v := range want {
-		if cfg[k] != v {
-			t.Errorf("%s = %q, want %q", k, cfg[k], v)
-		}
-	}
-	if len(cfg) != 3 || strings.Contains(add[5], "hubd_") {
+	if cfg.Type != "stdio" || cfg.Command != homeDir+"/bin/hubridge" || strings.Join(cfg.Args, " ") != "mcp --home "+homeDir || cfg.URL != "" {
 		t.Errorf("unexpected config %s", add[5])
+	}
+	if strings.Contains(add[5], "hubd_") || strings.Contains(add[5], "headersHelper") {
+		t.Errorf("config carries what it must not: %s", add[5])
 	}
 
 	os.Remove(log)
@@ -92,11 +90,11 @@ func TestRegisterMCPWithoutClaude(t *testing.T) {
 	t.Setenv("PATH", t.TempDir())
 	t.Setenv("HOME", t.TempDir())
 	var out bytes.Buffer
-	if err := RegisterMCP("/h", "https://hubd.test", &out); err != nil {
+	if err := RegisterMCP("/h", &out); err != nil {
 		t.Fatal(err)
 	}
 	s := out.String()
-	if strings.Count(s, "\n") != 1 || !strings.Contains(s, "not registered") || !strings.Contains(s, `claude mcp add-json --scope user hubd '{"type":"http","url":"https://hubd.test/mcp","headersHelper":"\"/h/bin/hubridge\" mcp-headers --home \"/h\""}'`) {
+	if strings.Count(s, "\n") != 1 || !strings.Contains(s, "not registered") || !strings.Contains(s, `claude mcp add-json --scope user hubd '{"type":"stdio","command":"/h/bin/hubridge","args":["mcp","--home","/h"]}'`) {
 		t.Fatalf("got %q", s)
 	}
 	out.Reset()

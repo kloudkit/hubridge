@@ -27,23 +27,22 @@ func Headers(h *home.Home, out io.Writer) error {
 	return err
 }
 
-func mcpConfig(homeDir, url string) string {
-	helper := selfCommand(homeDir, "mcp-headers")
+func mcpConfig(homeDir string) string {
 	var b bytes.Buffer
 	enc := json.NewEncoder(&b)
 	enc.SetEscapeHTML(false)
 	enc.Encode(struct {
-		Type          string `json:"type"`
-		URL           string `json:"url"`
-		HeadersHelper string `json:"headersHelper"`
-	}{"http", strings.TrimRight(url, "/") + "/mcp", helper})
+		Type    string   `json:"type"`
+		Command string   `json:"command"`
+		Args    []string `json:"args"`
+	}{"stdio", Binary(homeDir), []string{"mcp", "--home", homeDir}})
 	return strings.TrimSpace(b.String())
 }
 
 func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
 
-func RegisterMCP(homeDir, url string, out io.Writer) error {
-	cfg := mcpConfig(homeDir, url)
+func RegisterMCP(homeDir string, out io.Writer) error {
+	cfg := mcpConfig(homeDir)
 	claude, err := proc.Claude()
 	if err != nil {
 		fmt.Fprintf(out, "claude is not on PATH or in ~/.local/bin, so hubd's MCP server was not registered; run later: claude mcp add-json --scope user %s %s\n", mcpName, shellQuote(cfg))

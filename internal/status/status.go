@@ -38,6 +38,14 @@ func Path() (string, error) {
 	return filepath.Join(dir, "hubd", "status.json"), nil
 }
 
+func McpPath() (string, error) {
+	dir, err := install.ClaudeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "hubd", "mcp.json"), nil
+}
+
 func Read(path string) (Status, error) {
 	var s Status
 	b, err := os.ReadFile(path)
