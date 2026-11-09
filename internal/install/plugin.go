@@ -63,7 +63,7 @@ func marketplaceEntry(homeDir, hubd string) []byte {
 	return b
 }
 
-// RegisterMarketplace declares hubd's marketplace in user settings, where a headersHelper runs without asking, so Claude Code can fetch the catalog and its archives with the client token.
+// RegisterMarketplace declares hubd's marketplace and enables its plugin in user settings: Claude Code registers the marketplace and installs the plugin at the next session start, and runs the headersHelper without asking, so the catalog and its archives are fetched with the client token.
 func RegisterMarketplace(settingsPath, homeDir, hubd string, remove bool) error {
 	path, raw, err := readSettings(settingsPath)
 	switch {
@@ -82,18 +82,29 @@ func RegisterMarketplace(settingsPath, homeDir, hubd string, remove bool) error 
 		return fmt.Errorf("%s: not a JSON object", path)
 	}
 	key := "extraKnownMarketplaces." + Marketplace
+	enabled := "enabledPlugins." + strings.NewReplacer(".", "\\.", "@", "\\@").Replace(PluginID)
 	var out []byte
 	if remove {
 		if out, err = sjson.DeleteBytes(raw, key); err != nil {
 			return err
 		}
-		if left := gjson.GetBytes(out, "extraKnownMarketplaces"); left.Exists() && len(left.Map()) == 0 {
-			if out, err = sjson.DeleteBytes(out, "extraKnownMarketplaces"); err != nil {
-				return err
+		if out, err = sjson.DeleteBytes(out, enabled); err != nil {
+			return err
+		}
+		for _, k := range []string{"extraKnownMarketplaces", "enabledPlugins"} {
+			if left := gjson.GetBytes(out, k); left.Exists() && len(left.Map()) == 0 {
+				if out, err = sjson.DeleteBytes(out, k); err != nil {
+					return err
+				}
 			}
 		}
-	} else if out, err = sjson.SetRawBytes(raw, key, marketplaceEntry(homeDir, hubd)); err != nil {
-		return err
+	} else {
+		if out, err = sjson.SetRawBytes(raw, key, marketplaceEntry(homeDir, hubd)); err != nil {
+			return err
+		}
+		if out, err = sjson.SetBytes(out, enabled, true); err != nil {
+			return err
+		}
 	}
 	if bytes.Equal(out, raw) {
 		return nil
@@ -154,6 +165,10 @@ func InstallPlugin(ctx context.Context, out io.Writer) error {
 	if err != nil && !r.AlreadyInGoalState && r.FailureCode != "already_in_goal_state" {
 		if errors.Is(err, exec.ErrNotFound) {
 			fmt.Fprintf(out, "claude is not on PATH or in ~/.local/bin, so hubd's plugin was not installed; run later: claude plugin install %s --yes\n", PluginID)
+			return nil
+		}
+		if strings.Contains(string(b), "not found in marketplace") || strings.Contains(string(b), "not found") {
+			fmt.Fprintf(out, "hubd's plugin installs at the next Claude Code session start (the marketplace is registered then)\n")
 			return nil
 		}
 		return fmt.Errorf("claude plugin install %s: %s", PluginID, firstLine(r.Message, b))

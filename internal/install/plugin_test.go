@@ -61,7 +61,7 @@ func TestRegisterMarketplaceWritesTheHelperAndRemovesCleanly(t *testing.T) {
 	}
 	b, _ := os.ReadFile(path)
 	s := string(b)
-	for _, want := range []string{`"extraKnownMarketplaces"`, `"hubd": {`, `"source": "url"`, `"url": "https://hubd.test/marketplace.json"`, `"headersHelper": "\"/h/bin/hubridge\" mcp-headers --home \"/h\""`, `"model": "opus"`} {
+	for _, want := range []string{`"extraKnownMarketplaces"`, `"hubd": {`, `"source": "url"`, `"url": "https://hubd.test/marketplace.json"`, `"headersHelper": "\"/h/bin/hubridge\" mcp-headers --home \"/h\""`, `"enabledPlugins"`, `"hubd@hubd": true`, `"model": "opus"`} {
 		if !strings.Contains(s, want) {
 			t.Errorf("missing %s in\n%s", want, s)
 		}
