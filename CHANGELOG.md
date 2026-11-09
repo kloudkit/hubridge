@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-11-09
+
 ### Added
 
 - 🧩 After every connect and on `sync`, the daemon reconciles the plugins from hubd's marketplace with what hubd wants for this machine (`GET /api/client/plugins`): installs and enables what is on, disables what is off, updates a stale version, and reports what the machine has (`POST /api/client/plugins`); core stays on
@@ -84,7 +86,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 🔄 Update with `hubridge update`, and in the background on the saved channel
 - 🔏 Check every update against the release's signed manifest and the protocol hubd speaks
 
-[Unreleased]: https://github.com/kloudkit/hubridge/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/kloudkit/hubridge/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/kloudkit/hubridge/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/kloudkit/hubridge/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/kloudkit/hubridge/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/kloudkit/hubridge/compare/v0.3.0...v0.4.0
