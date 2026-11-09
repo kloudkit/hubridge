@@ -28,12 +28,20 @@ type upstream struct {
 	calls atomic.Int32
 }
 
-func newUpstream(t *testing.T) *upstream {
+func newUpstream(t *testing.T) *upstream { return newUpstreamWith(t, false) }
+
+func newUpstreamWith(t *testing.T, withSession bool) *upstream {
 	s := mcp.NewServer(&mcp.Implementation{Name: "hubd", Version: "test"}, nil)
 	s.AddTool(&mcp.Tool{Name: "echo", Description: "say it back", InputSchema: json.RawMessage(`{"type":"object","properties":{"x":{"type":"integer"}}}`)},
 		func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: "echo " + string(req.Params.Arguments)}}}, nil
 		})
+	if withSession {
+		s.AddTool(&mcp.Tool{Name: "note", Description: "takes a session", InputSchema: json.RawMessage(`{"type":"object","properties":{"text":{"type":"string"},"session":{"type":"string"}}}`)},
+			func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+				return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: string(req.Params.Arguments)}}}, nil
+			})
+	}
 	h := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return s }, &mcp.StreamableHTTPOptions{Stateless: true})
 	u := &upstream{}
 	u.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -220,3 +228,29 @@ func TestDescribe(t *testing.T) {
 type errString string
 
 func (e errString) Error() string { return string(e) }
+
+func TestStampsTheSessionOnCallsThatTakeOne(t *testing.T) {
+	u := newUpstreamWith(t, true)
+	r := start(t, u, token)
+	r.proxy.Session = "sess-1"
+	r.tools(t)
+	call := func(name string, args map[string]any) string {
+		res, err := r.cs.CallTool(context.Background(), &mcp.CallToolParams{Name: name, Arguments: args})
+		if err != nil || res.IsError {
+			t.Fatalf("%s: %v %q", name, err, text(res))
+		}
+		return text(res)
+	}
+	var got map[string]any
+	json.Unmarshal([]byte(call("note", map[string]any{"text": "hi"})), &got)
+	if got["session"] != "sess-1" || got["text"] != "hi" {
+		t.Fatalf("not stamped: %v", got)
+	}
+	json.Unmarshal([]byte(call("note", map[string]any{"text": "hi", "session": "mine"})), &got)
+	if got["session"] != "mine" {
+		t.Fatalf("overwrote the caller's session: %v", got)
+	}
+	if s := call("echo", map[string]any{"x": 1}); s != `echo {"x":1}` {
+		t.Fatalf("stamped a tool with no session argument: %s", s)
+	}
+}

@@ -45,6 +45,10 @@ type Proxy struct {
 	session *mcp.ClientSession
 	names   map[string]bool
 
+	Session      string
+	sessionMu    sync.Mutex
+	takesSession map[string]bool
+
 	lastMu   sync.Mutex
 	lastCode int
 	lastErr  error
@@ -116,8 +120,10 @@ func (p *Proxy) listTools(ctx context.Context) ([]*mcp.Tool, error) {
 
 func (p *Proxy) install(tools []*mcp.Tool) {
 	seen := map[string]bool{}
+	takes := map[string]bool{}
 	for _, t := range tools {
 		seen[t.Name] = true
+		takes[t.Name] = hasSession(t.InputSchema)
 		name := t.Name
 		p.server.AddTool(&mcp.Tool{
 			Name:         t.Name,
@@ -140,6 +146,46 @@ func (p *Proxy) install(tools []*mcp.Tool) {
 		p.server.RemoveTools(stale...)
 	}
 	p.names = seen
+	p.sessionMu.Lock()
+	p.takesSession = takes
+	p.sessionMu.Unlock()
+}
+
+func hasSession(schema any) bool {
+	b, err := json.Marshal(schema)
+	if err != nil {
+		return false
+	}
+	var s struct {
+		Properties map[string]json.RawMessage `json:"properties"`
+	}
+	if json.Unmarshal(b, &s) != nil {
+		return false
+	}
+	_, ok := s.Properties["session"]
+	return ok
+}
+
+func (p *Proxy) stamp(name string, args json.RawMessage) json.RawMessage {
+	p.sessionMu.Lock()
+	takes := p.takesSession[name]
+	p.sessionMu.Unlock()
+	if p.Session == "" || !takes {
+		return args
+	}
+	var m map[string]any
+	if json.Unmarshal(args, &m) != nil || m == nil {
+		return args
+	}
+	if v, ok := m["session"].(string); ok && v != "" {
+		return args
+	}
+	m["session"] = p.Session
+	b, err := json.Marshal(m)
+	if err != nil {
+		return args
+	}
+	return b
 }
 
 func raw(v any, required bool) any {
@@ -163,6 +209,7 @@ func (p *Proxy) call(ctx context.Context, name string, args json.RawMessage) (*m
 	if len(args) == 0 {
 		args = json.RawMessage(`{}`)
 	}
+	args = p.stamp(name, args)
 	callCtx, cancel := context.WithTimeout(ctx, p.Budget)
 	defer cancel()
 	var res *mcp.CallToolResult

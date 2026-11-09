@@ -231,6 +231,7 @@ func mcpCmd(args []string) error {
 	}
 	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	p := mcpproxy.New(h, strings.TrimRight(cfg.URL, "/")+"/mcp", version, status.New(path, cfg.Machine, cfg.URL, version, log), log)
+	p.Session = os.Getenv("CLAUDE_CODE_SESSION_ID")
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	return p.Serve(ctx, &mcp.StdioTransport{})
