@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-09
+
 ### Added
 
 - 🔌 `hubridge mcp`: hubd's MCP served to one Claude Code session over stdio, forwarding each call to `/mcp` with the client token read from the home on every request, retrying with backoff through a hubd restart, and serving the last tool list from `mcp-tools.json` while hubd is down
@@ -62,7 +64,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 🔄 Update with `hubridge update`, and in the background on the saved channel
 - 🔏 Check every update against the release's signed manifest and the protocol hubd speaks
 
-[Unreleased]: https://github.com/kloudkit/hubridge/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/kloudkit/hubridge/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/kloudkit/hubridge/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/kloudkit/hubridge/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/kloudkit/hubridge/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/kloudkit/hubridge/compare/v0.1.0...v0.2.0
