@@ -37,7 +37,7 @@ const help = `usage: hubridge [command] [flags]
 commands:
   run          watch transcripts and stream them to hubd, and write the instructions it sends (default)
   enroll       --url <hubd> (--code <code> | --token-file <path>) [--machine <name>]
-  setup        add the hubd hooks to Claude Code's settings.json and wrap its status line (--remove undoes both)
+  setup        register hubd's marketplace and install its plugin (hooks, footer, MCP) into Claude Code, and wrap the status line (--remove undoes it)
   hook         session-start | stop, run by Claude Code; session-start also checks the MCP registration in the session's folder
   supervise    restart loop for run (--detach to background it)
   mcp          serve hubd's MCP to one Claude Code session over stdio, forwarding to hubd with the client token
@@ -142,7 +142,7 @@ func enroll(args []string) error {
 func setup(args []string) error {
 	var remove bool
 	h, err := parse("setup", args, flag.ExitOnError, false, func(fs *flag.FlagSet) {
-		fs.BoolVar(&remove, "remove", false, "take the hubd hooks out")
+		fs.BoolVar(&remove, "remove", false, "take hubd's plugin, marketplace and status line out")
 	})
 	if err != nil {
 		return err
@@ -151,14 +151,25 @@ func setup(args []string) error {
 	if err != nil {
 		return err
 	}
-	if err := install.Setup(path, h.Dir, remove); err != nil {
+	if err := install.Setup(path, h.Dir, true); err != nil {
 		return err
 	}
-	fmt.Println("updated", path)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
 	if remove {
 		if err := install.UnwrapStatusLine(path, h.Dir); err != nil {
 			return err
 		}
+		if err := install.UninstallPlugin(ctx, os.Stdout); err != nil {
+			return err
+		}
+		if err := install.RegisterMarketplace(path, h.Dir, "", true); err != nil {
+			return err
+		}
+		if err := install.RemoveShim(); err != nil {
+			return err
+		}
+		fmt.Println("updated", path)
 		return install.UnregisterMCP(os.Stdout)
 	}
 	wrapped, err := install.WrapStatusLine(path, h.Dir)
@@ -171,7 +182,21 @@ func setup(args []string) error {
 	if h, err = home.Open(h.Dir); err != nil {
 		return err
 	}
-	return install.RegisterMCP(h.Dir, os.Stdout)
+	cfg, err := h.Config()
+	if err != nil {
+		return err
+	}
+	if _, err := install.WriteShim(h.Dir); err != nil {
+		return err
+	}
+	if err := install.RegisterMarketplace(path, h.Dir, cfg.URL, false); err != nil {
+		return err
+	}
+	fmt.Println("updated", path)
+	if err := install.UnregisterMCP(io.Discard); err != nil {
+		return err
+	}
+	return install.InstallPlugin(ctx, os.Stdout)
 }
 
 func statusLine(args []string) int {
@@ -313,7 +338,13 @@ func run(args []string) error {
 		if err := mirror.Restore(); err != nil {
 			log.Warn("restore the instructions from the manifest", "err", err)
 		}
-		client.Rules = mirror.Refresh
+		client.Rules = func(ctx context.Context) error {
+			err := mirror.Refresh(ctx)
+			if perr := install.EnsurePlugin(ctx, io.Discard); perr != nil {
+				log.Warn("hubd's plugin", "err", perr)
+			}
+			return err
+		}
 	}
 	watchErr := make(chan error, 1)
 	go func() { watchErr <- tracker.Watch(ctx, client, sessions.DefaultIntervals) }()

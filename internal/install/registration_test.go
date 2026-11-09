@@ -6,12 +6,17 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/kloudkit/hubridge/internal/home"
 )
 
-func fakeClaudeGet(t *testing.T, scope string, missing bool) string {
+func fakeClaudeGet(t *testing.T, scope string, missing bool, pluginInstalled bool) string {
+	pluginList := "[]"
+	if pluginInstalled {
+		pluginList = `[{"id":"hubd@hubd"}]`
+	}
 	dir := t.TempDir()
 	log := filepath.Join(dir, "argv")
 	body := "echo 'hubd:'; echo '  Scope: " + scope + "'; echo '  Status: ✔ Connected'\n"
@@ -20,8 +25,9 @@ func fakeClaudeGet(t *testing.T, scope string, missing bool) string {
 	}
 	script := "#!/bin/sh\nfor a in \"$@\"; do printf '%s\\037' \"$a\" >> '" + log + "'; done\necho >> '" + log + "'\n" +
 		"pwd >> '" + log + ".cwd'\n" +
-		"if [ \"$2\" = get ]; then " + body + "fi\n" +
-		"if [ \"$2\" = remove ]; then echo 'No MCP server found with name: hubd' >&2; exit 1; fi\n"
+		"if [ \"$1\" = mcp ] && [ \"$2\" = get ]; then " + body + "fi\n" +
+		"if [ \"$1\" = plugin ] && [ \"$2\" = list ]; then echo '" + pluginList + "'; exit 0; fi\n" +
+		"if [ \"$1\" = plugin ] && [ \"$2\" = install ]; then echo '{\"outcome\":\"success\"}'; exit 0; fi\n"
 	os.WriteFile(filepath.Join(dir, "claude"), []byte(script), 0o700)
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	return log
@@ -34,25 +40,26 @@ func TestCheckRegistrationScopes(t *testing.T) {
 		{"Local config (private to you in this project)", RegShadowed, "shadowed by local config"},
 	}
 	for _, c := range cases {
-		log := fakeClaudeGet(t, c.scope, false)
+		log := fakeClaudeGet(t, c.scope, false, true)
 		cwd := t.TempDir()
 		r := CheckRegistration(context.Background(), cwd)
 		if r.State != c.state || r.Reason() != c.want || r.Cwd != cwd {
 			t.Errorf("%q: %+v, reason %q", c.scope, r, r.Reason())
 		}
 		got := calls(t, log)
-		if len(got) != 1 || got[0][0] != "mcp" || got[0][1] != "get" || got[0][2] != "hubd" {
+		if len(got) < 1 || got[0][0] != "mcp" || got[0][1] != "get" || got[0][2] != "hubd" {
 			t.Errorf("calls %q", got)
 		}
 		b, _ := os.ReadFile(log + ".cwd")
-		if real, _ := filepath.EvalSymlinks(cwd); filepath.Clean(string(bytes.TrimSpace(b))) != real {
-			t.Errorf("ran in %q, want %q", b, real)
+		first, _, _ := strings.Cut(strings.TrimSpace(string(b)), "\n")
+		if real, _ := filepath.EvalSymlinks(cwd); filepath.Clean(first) != real {
+			t.Errorf("mcp get ran in %q, want %q", first, real)
 		}
 	}
 }
 
 func TestEnsureRegistrationRepairsAMissingEntry(t *testing.T) {
-	log := fakeClaudeGet(t, "", true)
+	log := fakeClaudeGet(t, "", true, false)
 	claudeDir := t.TempDir()
 	t.Setenv("CLAUDE_CONFIG_DIR", claudeDir)
 	h, _ := home.Open(t.TempDir())
@@ -65,7 +72,7 @@ func TestEnsureRegistrationRepairsAMissingEntry(t *testing.T) {
 		t.Fatalf("got %+v", r)
 	}
 	got := calls(t, log)
-	if len(got) != 3 || got[1][1] != "remove" || got[2][1] != "add-json" {
+	if len(got) != 3 || strings.Join(got[1], " ") != "plugin list --json" || strings.Join(got[2][:3], " ") != "plugin install hubd@hubd" {
 		t.Fatalf("calls %q", got)
 	}
 	b, err := os.ReadFile(filepath.Join(claudeDir, "hubd", "mcp", "sess-1.json"))

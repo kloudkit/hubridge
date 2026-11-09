@@ -31,28 +31,33 @@ recreated container gets its instructions back while hubd is down. A new machine
 its first connect. When hubd stops sending a file, hubridge removes it; it removes only files
 it wrote and leaves anything else in the folder alone.
 
-## MCP
+## Plugin and MCP
 
-`hubridge setup` registers hubd's MCP server in Claude Code's user scope as a stdio command,
-`hubridge mcp --home <dir>`. Claude Code starts one per session; it forwards every tool call to
-`<hubd>/mcp` over HTTPS with the client token, which never leaves hubridge's home. The token
-file is read on every request, so a rotated token takes effect without a restart.
+hubd's hooks, footer mod and MCP entry are one Claude Code plugin, `hubd@hubd`, that hubd serves
+from `GET /marketplace.json` as a pinned archive. `hubridge setup` declares that marketplace in
+Claude Code's user settings (`extraKnownMarketplaces.hubd`, a `url` source whose `headersHelper`
+is `hubridge mcp-headers`, so the catalog and the archive are fetched with the client token),
+installs the plugin with `claude plugin install hubd@hubd`, and writes a launcher at
+`~/.claude/hubd/bin/hubridge` that the plugin's hooks and MCP entry run, since a plugin cannot
+know the client home. `settings.json` keeps only the status line. The daemon runs
+`claude plugin update hubd@hubd` after every connect and on `sync`, and installs the plugin when
+it is missing, so a recreated machine gets it back once hubd answers. `setup --remove` undoes all
+of it.
 
-The process keeps the last tool list in `mcp-tools.json` in its home and serves it while hubd
-cannot be reached, so a session starting during a deploy still has its hubd tools; the list is
-refreshed as soon as hubd answers. A call retries with backoff for up to 8 seconds through a
-restart, then returns a tool error naming the reason (`HTTP 503`, `connection refused`,
-`HTTP 401`) instead of failing the session's connection.
+The plugin's MCP entry runs `hubridge mcp`, a stdio server Claude Code starts per session. It
+forwards every tool call to `<hubd>/mcp` over HTTPS with the client token, which never leaves
+hubridge's home; the token file is read on every request, so a rotated token takes effect without
+a restart. The process keeps the last tool list in `mcp-tools.json` in its home and serves it
+while hubd cannot be reached; a call retries with backoff for up to 8 seconds through a restart,
+then returns a tool error naming the reason (`HTTP 503`, `connection refused`, `HTTP 401`). It
+writes `~/.claude/hubd/mcp.json`, in the status file's shape below, saying whether hubd's MCP
+answered the last call and, when not, why. The daemon is not in the path.
 
-It writes `~/.claude/hubd/mcp.json`, in the status file's shape below, saying whether hubd's
-MCP answered the last call and, when not, why. The daemon is not in the path: the MCP works
-without it.
-
-A project or local-scope `hubd` entry in Claude Code's config wins over the user-scope one and
-would send that folder's sessions elsewhere. The `session-start` hook runs `claude mcp get hubd`
-in the session's folder, re-adds a missing user-scope entry, and writes what it found to
-`~/.claude/hubd/mcp/<session>.json`; the `stop` hook removes it. `hubridge doctor` reports the
-same for the folder it runs in.
+A project or local-scope `hubd` MCP entry in Claude Code's config wins over the plugin's and
+would send that folder's sessions elsewhere. The `session-start` hook checks for one in the
+session's folder and that the plugin is installed, installs it when it is missing, and writes what
+it found to `~/.claude/hubd/mcp/<session>.json`; the `stop` hook removes it. `hubridge doctor`
+reports the same for the folder it runs in.
 
 ## Status file
 

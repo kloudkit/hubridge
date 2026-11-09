@@ -349,12 +349,12 @@ func CheckRegistration(r *Report, ctx context.Context) {
 	reg := install.CheckRegistration(ctx, cwd)
 	switch reg.State {
 	case install.RegUser:
-		r.add(OK, "mcp", "hubd's MCP server is registered in user scope, and nothing shadows it in %s", cwd)
+		r.add(OK, "plugin", "hubd's plugin is installed, and no project or local hubd MCP entry shadows it in %s", cwd)
 	case install.RegShadowed:
-		r.add(Fail, "mcp", "a %s-scope hubd entry shadows hubridge's in %s: sessions started here use it instead; remove it from that config", reg.Scope, cwd)
+		r.add(Fail, "plugin", "a %s-scope hubd MCP entry in %s takes over from the plugin's for sessions started here; remove it from that config", reg.Scope, cwd)
 	case install.RegMissing:
-		r.add(Fail, "mcp", "hubd's MCP server is not registered for Claude Code: run hubridge setup")
+		r.add(Fail, "plugin", "hubd's plugin (%s) is not installed: run hubridge setup", install.PluginID)
 	default:
-		r.add(Info, "mcp", "claude mcp get hubd could not be run, so the registration was not checked")
+		r.add(Info, "plugin", "claude could not be run, so the plugin was not checked")
 	}
 }

@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- 🔌 hubd's hooks, footer mod and MCP entry come as one Claude Code plugin, `hubd@hubd`, served by hubd's marketplace: `setup` declares the marketplace in user settings with `mcp-headers` as its `headersHelper`, installs the plugin, and writes the launcher `~/.claude/hubd/bin/hubridge` the plugin runs; it no longer writes hooks or an MCP entry into Claude Code's own config, and `--remove` undoes all of it
+- 🔁 The daemon updates the plugin after every connect and on `sync`, and installs it when it is missing
+- 🩺 The session-start check and `doctor` report the plugin's presence and a shadowing project or local MCP entry
+
 ### Fixed
 
 - 🩺 Pin the `stop_hook_summary` system subtype Claude Code writes after every Stop hook, so `hubridge doctor` no longer reports it as drift

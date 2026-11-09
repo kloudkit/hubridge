@@ -35,7 +35,7 @@ func (r Registration) Reason() string {
 	case RegShadowed:
 		return "shadowed by " + r.Scope + " config"
 	case RegMissing:
-		return "not registered"
+		return "plugin not installed"
 	case RegUnknown:
 		return "registration unknown"
 	}
@@ -61,6 +61,7 @@ func RegistrationPath(sessionID string) (string, error) {
 	return filepath.Join(dir, sessionID+".json"), nil
 }
 
+// CheckRegistration reports how sessions started in cwd reach hubd: through the installed plugin, shadowed by a project or local `hubd` MCP entry, or not at all.
 func CheckRegistration(ctx context.Context, cwd string) Registration {
 	r := Registration{State: RegUnknown, Cwd: cwd, At: time.Now().UTC().Truncate(time.Second)}
 	claude, err := proc.Claude()
@@ -70,26 +71,29 @@ func CheckRegistration(ctx context.Context, cwd string) Registration {
 	cmd := exec.CommandContext(ctx, claude, "mcp", "get", mcpName)
 	cmd.Dir = cwd
 	out, err := cmd.CombinedOutput()
-	text := string(out)
-	if err != nil {
-		if notFound(out) {
-			r.State = RegMissing
+	if err == nil {
+		for _, line := range strings.Split(string(out), "\n") {
+			line = strings.TrimSpace(line)
+			if !strings.HasPrefix(line, "Scope:") {
+				continue
+			}
+			scope := strings.ToLower(strings.Fields(strings.TrimSpace(strings.TrimPrefix(line, "Scope:")))[0])
+			if scope == "project" || scope == "local" {
+				r.State, r.Scope = RegShadowed, scope
+				return r
+			}
 		}
+	} else if !notFound(out) {
 		return r
 	}
-	for _, line := range strings.Split(text, "\n") {
-		line = strings.TrimSpace(line)
-		if !strings.HasPrefix(line, "Scope:") {
-			continue
-		}
-		scope := strings.ToLower(strings.Fields(strings.TrimSpace(strings.TrimPrefix(line, "Scope:")))[0])
-		r.Scope = scope
-		if scope == RegUser {
-			r.State = RegUser
-		} else {
-			r.State = RegShadowed
-		}
+	installed, err := PluginInstalled(ctx)
+	switch {
+	case err != nil:
 		return r
+	case installed:
+		r.State = RegUser
+	default:
+		r.State = RegMissing
 	}
 	return r
 }
@@ -97,7 +101,7 @@ func CheckRegistration(ctx context.Context, cwd string) Registration {
 func EnsureRegistration(ctx context.Context, h *home.Home, cwd, sessionID string, out io.Writer) (Registration, error) {
 	r := CheckRegistration(ctx, cwd)
 	if r.State == RegMissing {
-		if err := RegisterMCP(h.Dir, out); err == nil {
+		if err := InstallPlugin(ctx, out); err == nil {
 			r.State = RegRepaired
 		}
 	}
