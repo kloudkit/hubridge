@@ -16,6 +16,7 @@ const (
 
 type HookInput struct {
 	SessionID       string `json:"session_id"`
+	Cwd             string `json:"cwd"`
 	BackgroundTasks *[]struct {
 		Type string `json:"type"`
 	} `json:"background_tasks"`

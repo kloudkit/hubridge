@@ -6,6 +6,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -37,7 +38,7 @@ commands:
   run          watch transcripts and stream them to hubd, and write the instructions it sends (default)
   enroll       --url <hubd> (--code <code> | --token-file <path>) [--machine <name>]
   setup        add the hubd hooks to Claude Code's settings.json and wrap its status line (--remove undoes both)
-  hook         session-start | stop, run by Claude Code
+  hook         session-start | stop, run by Claude Code; session-start also checks the MCP registration in the session's folder
   supervise    restart loop for run (--detach to background it)
   mcp          serve hubd's MCP to one Claude Code session over stdio, forwarding to hubd with the client token
   statusline   run by Claude Code as its status line: keep the usage reading, then run the original
@@ -230,8 +231,18 @@ func hook(args []string) {
 	switch event {
 	case "session-start":
 		err = install.SessionStart(h, func() error { return install.Detach(h, self()) })
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		cwd := in.Cwd
+		if cwd == "" {
+			cwd, _ = os.Getwd()
+		}
+		if _, rerr := install.EnsureRegistration(ctx, h, cwd, in.SessionID, io.Discard); rerr != nil && err == nil {
+			err = rerr
+		}
 	case "stop":
 		err = install.Stop(h, in, time.Now())
+		install.ClearRegistration(in.SessionID)
 	}
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "hubridge hook:", err)
@@ -425,6 +436,7 @@ func doctorCmd(args []string) int {
 	rep := doctor.Run(context.Background(), projects, days)
 	doctor.CheckRules(rep, h.Dir)
 	doctor.CheckStatus(rep, time.Now())
+	doctor.CheckRegistration(rep, context.Background())
 	rep.Write(os.Stdout)
 	switch rep.Worst() {
 	case doctor.Fail:

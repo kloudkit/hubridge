@@ -12,6 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 🔌 `hubridge mcp`: hubd's MCP served to one Claude Code session over stdio, forwarding each call to `/mcp` with the client token read from the home on every request, retrying with backoff through a hubd restart, and serving the last tool list from `mcp-tools.json` while hubd is down
 - 🚦 `~/.claude/hubd/mcp.json`, the status file's shape for the MCP link: connected after a call that hubd answered, offline with `HTTP 401`, `HTTP 503`, `connection refused` or the like otherwise
 
+- 🩺 `hook session-start` checks that hubd's MCP server is registered in user scope as seen from the session's folder, re-adds it when it is missing, and writes the finding to `~/.claude/hubd/mcp/<session>.json` (`shadowed` with the scope that wins, `missing`, `repaired`, `user`) for the footer mod; `hook stop` removes the file, and `hubridge doctor` reports the same check for its own folder
+
 ### Changed
 
 - 🔧 `hubridge setup` registers the MCP server as that stdio command instead of an `http` entry with a `headersHelper`; `mcp-headers` stays for configs written before this version

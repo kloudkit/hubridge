@@ -48,6 +48,12 @@ It writes `~/.claude/hubd/mcp.json`, in the status file's shape below, saying wh
 MCP answered the last call and, when not, why. The daemon is not in the path: the MCP works
 without it.
 
+A project or local-scope `hubd` entry in Claude Code's config wins over the user-scope one and
+would send that folder's sessions elsewhere. The `session-start` hook runs `claude mcp get hubd`
+in the session's folder, re-adds a missing user-scope entry, and writes what it found to
+`~/.claude/hubd/mcp/<session>.json`; the `stop` hook removes it. `hubridge doctor` reports the
+same for the folder it runs in.
+
 ## Status file
 
 The daemon keeps `~/.claude/hubd/status.json` (under `CLAUDE_CONFIG_DIR` when it is set) saying
