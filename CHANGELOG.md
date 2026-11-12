@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-11-12
+
 ### Added
 
 - 📌 `setup` puts a marked block first in `~/.claude/CLAUDE.md`: search estate before assuming, and where hubd's manual is (`rules/hubd/hubd-estate.md`); the rest of the file is kept, `--remove` takes the block out, and the daemon puts it back on start when it is missing
@@ -96,8 +98,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 🔄 Update with `hubridge update`, and in the background on the saved channel
 - 🔏 Check every update against the release's signed manifest and the protocol hubd speaks
 
-[Unreleased]: https://github.com/kloudkit/hubridge/compare/v0.8.0...HEAD
-[0.8.0]: https://github.com/kloudkit/hubridge/compare/v0.7.0...v0.8.0
+[Unreleased]: https://github.com/kloudkit/hubridge/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/kloudkit/hubridge/compare/v0.8.0...v0.9.0
 [0.7.0]: https://github.com/kloudkit/hubridge/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/kloudkit/hubridge/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/kloudkit/hubridge/compare/v0.4.0...v0.5.0
