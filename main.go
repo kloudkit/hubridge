@@ -170,6 +170,11 @@ func setup(args []string) error {
 		if err := install.RemoveShim(); err != nil {
 			return err
 		}
+		if md, err := install.ClaudeMdPath(); err == nil {
+			if err := install.RemovePointer(md); err != nil {
+				return err
+			}
+		}
 		fmt.Println("updated", path)
 		return install.UnregisterMCP(os.Stdout)
 	}
@@ -189,6 +194,13 @@ func setup(args []string) error {
 	}
 	if _, err := install.WriteShim(h.Dir); err != nil {
 		return err
+	}
+	if md, err := install.ClaudeMdPath(); err == nil {
+		if changed, err := install.WritePointer(md); err != nil {
+			return err
+		} else if changed {
+			fmt.Println("put hubd's pointer first in", md)
+		}
 	}
 	if err := install.RegisterMarketplace(path, h.Dir, cfg.URL, false); err != nil {
 		return err
@@ -339,6 +351,13 @@ func run(args []string) error {
 		mirror := rules.New(cfg.URL, cfg.Machine, h, dir, log)
 		if err := mirror.Restore(); err != nil {
 			log.Warn("restore the instructions from the manifest", "err", err)
+		}
+		if md, err := install.ClaudeMdPath(); err == nil {
+			if changed, err := install.WritePointer(md); err != nil {
+				log.Warn("put hubd's pointer in CLAUDE.md", "err", err)
+			} else if changed {
+				log.Info("hubd's pointer was missing from CLAUDE.md; put it back", "path", md)
+			}
 		}
 		plugHTTP := &http.Client{Timeout: 30 * time.Second}
 		client.Rules = func(ctx context.Context) error {

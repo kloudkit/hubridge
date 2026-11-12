@@ -61,6 +61,13 @@ session's folder and that the plugin is installed, installs it when it is missin
 it found to `~/.claude/hubd/mcp/<session>.json`; the `stop` hook removes it. `hubridge doctor`
 reports the same for the folder it runs in.
 
+## The pointer in CLAUDE.md
+
+`setup` writes a marked block (`<!-- hubd:start -->` to `<!-- hubd:end -->`) first in
+`~/.claude/CLAUDE.md`: the one rule to read before anything else, search estate before
+assuming, and where hubd's estate manual is. The user's own text stays after it; `--remove`
+takes only the block out; the daemon puts it back on start when it is missing.
+
 ## Status file
 
 The daemon keeps `~/.claude/hubd/status.json` (under `CLAUDE_CONFIG_DIR` when it is set) saying

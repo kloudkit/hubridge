@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- 📌 `setup` puts a marked block first in `~/.claude/CLAUDE.md`: search estate before assuming, and where hubd's manual is (`rules/hubd/hubd-estate.md`); the rest of the file is kept, `--remove` takes the block out, and the daemon puts it back on start when it is missing
+
 ## [0.8.0] - 2026-11-09
 
 ### Added
