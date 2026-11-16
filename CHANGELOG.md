@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- ✨ `hubridge scope [<name> | general]` makes a hubd scope active for the session it is run in, or leaves only general, and prints the profile now in force: the claims hubd always loads, the style for answers and the voice for written text. `hook session-start` prints the same profile, so a new or resumed session starts with it. The active scope is left in `hubd/scope/<session>.json` under the Claude Code directory for the plugin's footer. A hubd without scopes answers 404 and nothing is printed.
+
 ## [0.9.0] - 2026-11-12
 
 ### Added

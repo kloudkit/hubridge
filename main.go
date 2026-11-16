@@ -3,6 +3,7 @@ package main
 import (
 	"cmp"
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -236,6 +237,23 @@ func scopeClient(h *home.Home) (scope.Client, home.Config, error) {
 	return scope.Client{URL: cfg.URL, Token: token, HTTP: &http.Client{Timeout: 10 * time.Second}}, cfg, nil
 }
 
+// noteScope leaves the session's active scope where the plugin's footer reads it; general alone leaves no file.
+func noteScope(session, active string) {
+	dir, err := install.ClaudeDir()
+	if err != nil || !home.ValidID(session) {
+		return
+	}
+	path := filepath.Join(dir, "hubd", "scope", session+".json")
+	if active == "" {
+		os.Remove(path)
+		return
+	}
+	if os.MkdirAll(filepath.Dir(path), 0o755) == nil {
+		b, _ := json.Marshal(map[string]string{"scope": active})
+		home.WriteFile(path, append(b, '\n'))
+	}
+}
+
 func scopeCmd(args []string) error {
 	var session string
 	var fs *flag.FlagSet
@@ -267,6 +285,7 @@ func scopeCmd(args []string) error {
 	if err != nil {
 		return err
 	}
+	noteScope(session, p.Active())
 	if text := scope.Render(p); text != "" {
 		fmt.Print(text)
 	} else {
@@ -327,6 +346,7 @@ func hook(args []string) {
 		if c, _, cerr := scopeClient(h); cerr == nil {
 			pctx, pcancel := context.WithTimeout(context.Background(), 2*time.Second)
 			if p, perr := c.Profile(pctx, in.SessionID); perr == nil {
+				noteScope(in.SessionID, p.Active())
 				fmt.Print(scope.Render(p))
 			}
 			pcancel()
