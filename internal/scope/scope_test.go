@@ -55,7 +55,7 @@ func TestClientSetsAScopeAndReadsTheProfile(t *testing.T) {
 			return
 		}
 		switch r.Method + " " + r.URL.Path {
-		case "POST /api/estate-v2/scope":
+		case "POST /api/estate/scope":
 			b, _ := io.ReadAll(r.Body)
 			json.Unmarshal(b, &posted)
 			if posted["scope"] == "nowhere" {
@@ -64,7 +64,7 @@ func TestClientSetsAScopeAndReadsTheProfile(t *testing.T) {
 				return
 			}
 			io.WriteString(w, `{"client":"s1","scope":"work"}`)
-		case "GET /api/estate-v2/profile":
+		case "GET /api/estate/profile":
 			if r.URL.Query().Get("session") != "s 1" {
 				t.Errorf("session %q", r.URL.Query().Get("session"))
 			}

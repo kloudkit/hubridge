@@ -46,7 +46,7 @@ func (c Client) do(ctx context.Context, method, path string, body any, out any) 
 		}
 		r = bytes.NewReader(b)
 	}
-	req, err := http.NewRequestWithContext(ctx, method, strings.TrimRight(c.URL, "/")+"/api/estate-v2"+path, r)
+	req, err := http.NewRequestWithContext(ctx, method, strings.TrimRight(c.URL, "/")+"/api/estate"+path, r)
 	if err != nil {
 		return err
 	}
