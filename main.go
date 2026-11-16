@@ -23,6 +23,7 @@ import (
 	"github.com/kloudkit/hubridge/internal/proc"
 	"github.com/kloudkit/hubridge/internal/protocol"
 	"github.com/kloudkit/hubridge/internal/rules"
+	"github.com/kloudkit/hubridge/internal/scope"
 	"github.com/kloudkit/hubridge/internal/sessions"
 	"github.com/kloudkit/hubridge/internal/status"
 	"github.com/kloudkit/hubridge/internal/update"
@@ -42,6 +43,7 @@ commands:
   hook         session-start | stop, run by Claude Code; session-start also checks the MCP registration in the session's folder
   supervise    restart loop for run (--detach to background it)
   mcp          serve hubd's MCP to one Claude Code session over stdio, forwarding to hubd with the client token
+  scope        [<name> | general] make a scope active for this session, or leave only general; prints the profile now in force (no name: show it)
   statusline   run by Claude Code as its status line: keep the usage reading, then run the original
   doctor       check the Claude Code formats the daemon reads against the pinned ones (--days 7), list the instruction files and read the status file
   update       install the newest build of the saved channel (--version bundled|latest|<tag> changes the channel)
@@ -73,6 +75,8 @@ func main() {
 		err = mcpCmd(args)
 	case "mcp-headers":
 		err = mcpHeaders(args)
+	case "scope":
+		err = scopeCmd(args)
 	case "statusline":
 		os.Exit(statusLine(args))
 	case "doctor":
@@ -220,6 +224,57 @@ func statusLine(args []string) int {
 	return install.RunStatusLine(context.Background(), h, os.Stdin, os.Stdout, os.Stderr, time.Now())
 }
 
+func scopeClient(h *home.Home) (scope.Client, home.Config, error) {
+	cfg, err := h.Config()
+	if err != nil {
+		return scope.Client{}, cfg, err
+	}
+	token, err := h.Token()
+	if err != nil {
+		return scope.Client{}, cfg, err
+	}
+	return scope.Client{URL: cfg.URL, Token: token, HTTP: &http.Client{Timeout: 10 * time.Second}}, cfg, nil
+}
+
+func scopeCmd(args []string) error {
+	var session string
+	var fs *flag.FlagSet
+	h, err := parse("scope", args, flag.ExitOnError, true, func(f *flag.FlagSet) {
+		fs = f
+		f.StringVar(&session, "session", os.Getenv("CLAUDE_CODE_SESSION_ID"), "the Claude Code session id")
+	})
+	if err != nil {
+		return err
+	}
+	if session == "" {
+		return errors.New("run it inside a Claude Code session (! hubridge scope <name>), or pass --session")
+	}
+	c, cfg, err := scopeClient(h)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if name := fs.Arg(0); name != "" {
+		if name == "general" || name == "none" {
+			name = ""
+		}
+		if err := c.Set(ctx, session, name, cfg.Machine); err != nil {
+			return err
+		}
+	}
+	p, err := c.Profile(ctx, session)
+	if err != nil {
+		return err
+	}
+	if text := scope.Render(p); text != "" {
+		fmt.Print(text)
+	} else {
+		fmt.Println("hubd profile in force: general, with nothing loaded.")
+	}
+	return nil
+}
+
 func mcpHeaders(args []string) error {
 	h, err := parse("mcp-headers", args, flag.ExitOnError, false, nil)
 	if err != nil {
@@ -269,6 +324,13 @@ func hook(args []string) {
 	}
 	switch event {
 	case "session-start":
+		if c, _, cerr := scopeClient(h); cerr == nil {
+			pctx, pcancel := context.WithTimeout(context.Background(), 2*time.Second)
+			if p, perr := c.Profile(pctx, in.SessionID); perr == nil {
+				fmt.Print(scope.Render(p))
+			}
+			pcancel()
+		}
 		err = install.SessionStart(h, func() error { return install.Detach(h, self()) })
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
